@@ -207,13 +207,44 @@ export async function fetchPosition(
   return null;
 }
 
+/**
+ * Calls buy_shares(market_id, side, amount) on the contract.
+ *
+ * Contract signature (contracts/src/lib.rs):
+ *   buy_shares(env, market_id: u32, side: u32, amount: i128)
+ *
+ * @param callerPublicKey — connected wallet public key
+ * @param marketId        — market ID (converted to u32)
+ * @param side            — "YES" (0) or "NO" (1)
+ * @param amountXlm       — XLM amount (converted to stroops: 1 XLM = 10,000,000 stroops)
+ * @returns transaction hash
+ * @throws ContractError
+ */
 export async function buyShares(
-  marketId: string,
+  callerPublicKey: string,
+  marketId: string | number,
   side: "YES" | "NO",
-  amount: bigint
-): Promise<string | null> {
-  console.warn("contract.ts: buyShares() not yet implemented", { marketId, side, amount });
-  return null;
+  amountXlm: number
+): Promise<string> {
+  if (!callerPublicKey) {
+    throw new ContractError("WALLET_REQUIRED", "Wallet must be connected to buy shares.");
+  }
+
+  const marketIdNum = typeof marketId === "number" ? marketId : parseInt(marketId, 10) || 1;
+  const sideNum = side === "YES" ? 0 : 1;
+  const amountStroops = BigInt(Math.round(amountXlm * 10_000_000));
+
+  if (amountStroops <= 0n) {
+    throw new ContractError("UNKNOWN", "Amount must be greater than 0 XLM.");
+  }
+
+  const args: xdr.ScVal[] = [
+    nativeToScVal(marketIdNum,    { type: "u32"  }),
+    nativeToScVal(sideNum,        { type: "u32"  }),
+    nativeToScVal(amountStroops,  { type: "i128" }),
+  ];
+
+  return invokeContract(callerPublicKey, "buy_shares", args);
 }
 
 export async function resolveMarket(
