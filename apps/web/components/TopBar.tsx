@@ -170,9 +170,9 @@ export default function TopBar() {
               <div>
                 <p className="text-sm font-bold mb-1" style={{ color: "#FF4D5E" }}>
                   {error.code === "NOT_INSTALLED"
-                    ? "Freighter not found"
+                    ? "Wallet not found"
                     : error.code === "REJECTED"
-                    ? "Connection rejected"
+                    ? "Connection cancelled"
                     : error.code === "WRONG_NETWORK"
                     ? "Wrong network"
                     : error.code === "AUTH_FAILED"
@@ -181,20 +181,6 @@ export default function TopBar() {
                 </p>
                 <p className="text-xs leading-relaxed" style={{ color: "#8B93A7" }}>
                   {error.message}
-                  {error.code === "NOT_INSTALLED" && (
-                    <>
-                      {" "}
-                      <a
-                        href="https://freighter.app"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline"
-                        style={{ color: "#00D084" }}
-                      >
-                        Download Freighter
-                      </a>
-                    </>
-                  )}
                 </p>
               </div>
               <button
