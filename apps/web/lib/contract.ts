@@ -10,7 +10,7 @@
 //   NEXT_PUBLIC_ADMIN_ADDRESS         — admin wallet public key
 
 import {
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
   Contract,
   Networks,
@@ -31,8 +31,8 @@ function isConfigured(): boolean {
   return Boolean(CONTRACT_ID && RPC_URL);
 }
 
-function getServer(): SorobanRpc.Server {
-  return new SorobanRpc.Server(RPC_URL, {
+function getServer(): rpc.Server {
+  return new rpc.Server(RPC_URL, {
     allowHttp: RPC_URL.startsWith("http://"),
   });
 }
@@ -92,7 +92,7 @@ async function invokeContract(
 
   // Simulate to get the resource footprint
   const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
+  if (rpc.Api.isSimulationError(simResult)) {
     throw new ContractError(
       "SIMULATION_FAILED",
       `Contract simulation failed: ${simResult.error}`
@@ -100,7 +100,7 @@ async function invokeContract(
   }
 
   // Assemble adds the resource fee and auth entries from simulation
-  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+  const preparedTx = rpc.assembleTransaction(tx, simResult).build();
 
   // Sign via Freighter
   let signedXdr: string;
@@ -137,10 +137,10 @@ async function invokeContract(
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 1500));
     const statusResult = await server.getTransaction(hash);
-    if (statusResult.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+    if (statusResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
       return hash;
     }
-    if (statusResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+    if (statusResult.status === rpc.Api.GetTransactionStatus.FAILED) {
       throw new ContractError(
         "SUBMIT_FAILED",
         `Transaction ${hash} was included in a ledger but execution failed.`
