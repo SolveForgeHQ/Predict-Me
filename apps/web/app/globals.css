@@ -1,0 +1,95 @@
+@import "tailwindcss";
+
+:root {
+  --bg-base: #0B0E14;
+  --bg-card: #161B26;
+  --accent-yes: #00D084;
+  --accent-no: #FF4D5E;
+  --text-primary: #F2F4F7;
+  --text-muted: #8B93A7;
+}
+
+body {
+  background-color: #0B0E14;
+  color: #F2F4F7;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Remove number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* ── Market card hover ────────────────────────────────────── */
+.market-card {
+  background-color: #161B26;
+  border: 1px solid #1E2435;
+  transition: transform 0.22s cubic-bezier(.22,1,.36,1),
+              border-color 0.22s ease,
+              box-shadow 0.22s ease;
+}
+.market-card:hover {
+  transform: translateY(-4px);
+  border-color: #00D08450;
+  box-shadow: 0 12px 40px rgba(0,208,132,0.13), 0 2px 8px rgba(0,0,0,0.4);
+}
+
+/* ── Skeleton shimmer ─────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -600px 0; }
+  100% { background-position: 600px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #161B26 25%, #1E2435 50%, #161B26 75%);
+  background-size: 600px 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 12px;
+}
+
+/* ── Button transitions ───────────────────────────────────── */
+.btn-yes {
+  background-color: #00D084;
+  color: #0B0E14;
+  transition: opacity 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.btn-yes:hover {
+  opacity: 0.9;
+  box-shadow: 0 0 20px rgba(0,208,132,0.45);
+  transform: translateY(-1px);
+}
+.btn-yes:active { transform: translateY(0); opacity: 0.8; }
+
+.btn-no {
+  background-color: #FF4D5E;
+  color: #fff;
+  transition: opacity 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.btn-no:hover {
+  opacity: 0.9;
+  box-shadow: 0 0 20px rgba(255,77,94,0.45);
+  transform: translateY(-1px);
+}
+.btn-no:active { transform: translateY(0); opacity: 0.8; }
+
+/* ── Tab toggle (YES / NO active state) ──────────────────── */
+.side-tab {
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+/* ── Hide scrollbar globally ─────────────────────────────── */
+* {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* IE / Edge */
+}
+*::-webkit-scrollbar {
+  display: none;                /* Chrome / Safari / Opera */
+}

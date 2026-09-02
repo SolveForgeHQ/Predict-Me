@@ -1,0 +1,6 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: Contributing guidelines
+    url: https://github.com/SolveForgeHQ/predict-me-contracts/blob/main/CONTRIBUTING.md
+    about: Read this before opening a PR or asking how to contribute.

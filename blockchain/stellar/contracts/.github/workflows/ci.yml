@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Rust toolchain ──────────────────────────────────────────────────────
+      # stable is required by soroban-sdk v25.
+      # wasm32v1-none is the target used by `stellar contract build` (Makefile).
+      # The native target (x86_64) is used by `cargo test` and needs no extra setup.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      # ── Cargo cache ─────────────────────────────────────────────────────────
+      # Caches ~/.cargo/registry, ~/.cargo/git, and the target/ directory.
+      # Keyed on OS + Cargo.lock so the cache is invalidated when dependencies change.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # ── Stellar CLI ─────────────────────────────────────────────────────────
+      # Required for `stellar contract build` (used in the Makefile build target).
+      # Pinned to a specific version to keep builds reproducible.
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli --version 22.0.1
+
+      # ── Build ────────────────────────────────────────────────────────────────
+      # Uses `stellar contract build` which compiles to wasm32v1-none/release/
+      # and produces the .wasm artefact. Matches `make build`.
+      - name: Build contract
+        run: stellar contract build
+
+      # ── Test ─────────────────────────────────────────────────────────────────
+      # Runs unit and integration tests in the native target using soroban-sdk's
+      # testutils feature. Does not require WASM compilation.
+      - name: Test
+        run: cargo test
