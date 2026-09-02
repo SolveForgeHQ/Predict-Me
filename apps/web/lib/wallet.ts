@@ -34,6 +34,7 @@ export type WalletErrorCode =
   | "NOT_INSTALLED"
   | "REJECTED"
   | "WRONG_NETWORK"
+  | "AUTH_FAILED"
   | "UNKNOWN";
 
 export class WalletError extends Error {
@@ -188,7 +189,7 @@ export async function restoreSession(): Promise<string | null> {
   return null;
 }
 
-// ── Signing (wired up in a future pass) ─────────────────────
+// ── Signing ──────────────────────────────────────────────────
 
 /**
  * Signs an XDR transaction envelope via Freighter.
@@ -200,6 +201,42 @@ export async function signTransaction(xdr: string): Promise<string> {
     networkPassphrase: STELLAR_NETWORK_PASSPHRASE,
   });
   return signedTxXdr;
+}
+
+/**
+ * Signs an arbitrary UTF-8 message via Freighter.
+ * Returns the base64-encoded Ed25519 signature.
+ * Throws WalletError if the user rejects or the wallet is unavailable.
+ */
+export async function signMessage(message: string): Promise<string> {
+  initKit();
+  try {
+    const { signedMessage } = await StellarWalletsKit.signMessage(message);
+    // signedMessage is already a base64 string in swk v2
+    return signedMessage;
+  } catch (err) {
+    let msg: string;
+    if (err instanceof Error) {
+      msg = err.message;
+    } else if (err && typeof err === "object") {
+      const e = err as Record<string, unknown>;
+      msg =
+        typeof e.message === "string" ? e.message :
+        typeof e.reason === "string" ? e.reason :
+        "Could not sign message. Please try again.";
+    } else {
+      msg = "Could not sign message. Please try again.";
+    }
+    if (
+      msg.toLowerCase().includes("rejected") ||
+      msg.toLowerCase().includes("denied") ||
+      msg.toLowerCase().includes("cancelled") ||
+      msg.toLowerCase().includes("canceled")
+    ) {
+      throw new WalletError("REJECTED", "Signing request was rejected.");
+    }
+    throw new WalletError("UNKNOWN", msg);
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────

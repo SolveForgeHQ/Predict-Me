@@ -24,6 +24,8 @@ import {
   WalletError,
   type WalletErrorCode,
 } from "@/lib/wallet";
+import { loginWithWallet } from "@/lib/auth";
+import { clearSessionToken } from "@/lib/api";
 
 // ── Context shape ────────────────────────────────────────────
 
@@ -67,6 +69,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setConnecting(true);
     try {
       const addr = await connectWallet();
+      // Authenticate with the backend: sign a message and exchange for a JWT
+      await loginWithWallet(addr);
       setPublicKey(addr);
     } catch (err) {
       if (err instanceof WalletError) {
@@ -81,6 +85,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(async () => {
     await disconnectWallet();
+    clearSessionToken();
     setPublicKey(null);
     setError(null);
   }, []);

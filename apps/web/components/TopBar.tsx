@@ -175,6 +175,8 @@ export default function TopBar() {
                     ? "Connection rejected"
                     : error.code === "WRONG_NETWORK"
                     ? "Wrong network"
+                    : error.code === "AUTH_FAILED"
+                    ? "Login failed"
                     : "Connection failed"}
                 </p>
                 <p className="text-xs leading-relaxed" style={{ color: "#8B93A7" }}>
