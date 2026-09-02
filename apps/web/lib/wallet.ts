@@ -91,7 +91,20 @@ export async function connectWallet(): Promise<string> {
     const result = await StellarWalletsKit.authModal();
     address = result.address;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // Some wallet SDKs throw plain objects, not Error instances — extract a readable message
+    let msg: string;
+    if (err instanceof Error) {
+      msg = err.message;
+    } else if (err && typeof err === "object") {
+      const e = err as Record<string, unknown>;
+      msg =
+        typeof e.message === "string" ? e.message :
+        typeof e.reason === "string" ? e.reason :
+        typeof e.error === "string"  ? e.error  :
+        "Could not connect to wallet. Please try again.";
+    } else {
+      msg = "Could not connect to wallet. Please try again.";
+    }
     // Freighter throws a specific message when user rejects
     if (
       msg.toLowerCase().includes("rejected") ||

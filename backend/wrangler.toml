@@ -1,5 +1,6 @@
 name = "predict-me-backend"
 compatibility_date = "2024-12-24"
+main = "src/index.ts"
 
 [observability]
 enabled = true
