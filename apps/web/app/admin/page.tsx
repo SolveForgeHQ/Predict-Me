@@ -3,40 +3,120 @@
 import { useState } from "react";
 import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
-import { Wallet, ShieldOff } from "lucide-react";
+import { createMarket, ContractError } from "@/lib/contract";
+import { Wallet, ShieldOff, Loader2 } from "lucide-react";
 
-// Hardcoded owner address — replace with your real admin wallet public key
+// Hardcoded owner address — set NEXT_PUBLIC_ADMIN_ADDRESS in .env.local to override
 const ADMIN_ADDRESS =
   process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
   "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
+// Describes which step of the on-chain flow we're in
+type PendingStep =
+  | "simulating"   // RPC simulation
+  | "signing"      // Freighter prompt
+  | "submitting"   // broadcast to network
+  | "confirming";  // polling for ledger inclusion
+
+const STEP_LABEL: Record<PendingStep, string> = {
+  simulating:  "Simulating transaction…",
+  signing:     "Waiting for Freighter signature…",
+  submitting:  "Broadcasting to network…",
+  confirming:  "Confirming on ledger…",
+};
+
 export default function AdminPage() {
   const { publicKey, connected, connecting, connect } = useWallet();
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
+
+  // Form fields
   const [question, setQuestion] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
+  const [endDate, setEndDate]   = useState("");
+  const [category, setCategory] = useState("General");
 
-  const isAdmin = connected && publicKey === ADMIN_ADDRESS;
+  // Feedback
+  const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
+  const [errorMsg, setErrorMsg]       = useState("");
+  const [txHash, setTxHash]           = useState("");
 
-  const handleCreate = (e: React.FormEvent) => {
+  const isPending = pendingStep !== null;
+  const isAdmin   = connected && publicKey === ADMIN_ADDRESS;
+
+  // ── Create market ──────────────────────────────────────────
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin || !question.trim() || !endDate) return;
-    const newMarket: Market = {
-      id: String(Date.now()),
-      question: question.trim(),
-      yesPercent: 50,
-      noPercent: 50,
-      totalPool: 0,
-      endsAt: new Date(endDate).toISOString(),
-      status: "open",
-      category: "General",
-    };
-    setMarkets((prev) => [newMarket, ...prev]);
-    setQuestion("");
-    setEndDate("");
-    setSuccessMsg("Market created successfully.");
-    setTimeout(() => setSuccessMsg(""), 3000);
+    if (!isAdmin || !question.trim() || !endDate || isPending) return;
+
+    setErrorMsg("");
+    setTxHash("");
+
+    try {
+      // The contract wants Unix seconds, not milliseconds
+      const endTimestampSec = Math.floor(new Date(endDate).getTime() / 1000);
+
+      // Walk through the steps so the UI can show progress.
+      // invokeContract() internally does: simulate → sign → submit → poll.
+      setPendingStep("simulating");
+
+      await new Promise((r) => setTimeout(r, 0));
+
+      const callPromise = createMarket(
+        publicKey!,
+        question.trim(),
+        endTimestampSec,
+        category,
+      );
+
+      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
+      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
+
+      const hash = await callPromise;
+
+      clearTimeout(signingTimer);
+      clearTimeout(confirmingTimer);
+
+      setTxHash(hash);
+      setQuestion("");
+      setEndDate("");
+      setCategory("General");
+
+      // Optimistically add to the local list so the admin sees it immediately
+      const newMarket: Market = {
+        id: hash,
+        question: question.trim(),
+        yesPercent: 50,
+        noPercent: 50,
+        totalPool: 0,
+        endsAt: new Date(endDate).toISOString(),
+        status: "open",
+        category,
+      };
+      setMarkets((prev) => [newMarket, ...prev]);
+    } catch (err) {
+      if (err instanceof ContractError) {
+        switch (err.code) {
+          case "NOT_CONFIGURED":
+            setErrorMsg("Contract not configured. Set NEXT_PUBLIC_MARKET_CONTRACT_ID and NEXT_PUBLIC_SOROBAN_RPC_URL in .env.local.");
+            break;
+          case "SIGN_REJECTED":
+            setErrorMsg("Transaction was rejected in Freighter. No changes were made.");
+            break;
+          case "SIMULATION_FAILED":
+            setErrorMsg(`Simulation failed: ${err.message}`);
+            break;
+          case "SUBMIT_FAILED":
+            setErrorMsg(`Transaction failed on-chain: ${err.message}`);
+            break;
+          default:
+            setErrorMsg(err.message);
+        }
+      } else {
+        setErrorMsg("Unexpected error. Check the browser console for details.");
+        console.error("[admin] createMarket error:", err);
+      }
+    } finally {
+      setPendingStep(null);
+    }
   };
 
   const resolve = (id: string, outcome: "resolved_yes" | "resolved_no") => {
@@ -46,10 +126,10 @@ export default function AdminPage() {
     );
   };
 
-  const openCount = markets.filter((m) => m.status === "open").length;
+  const openCount     = markets.filter((m) => m.status === "open").length;
   const resolvedCount = markets.filter((m) => m.status !== "open").length;
 
-  // ── Not connected ─────────────────────────────────────────
+  // ── Not connected ────────────────────────────────────────
   if (!connected) {
     return (
       <div className="max-w-md mx-auto px-4 py-20 flex flex-col items-center text-center gap-5">
@@ -79,7 +159,7 @@ export default function AdminPage() {
     );
   }
 
-  // ── Connected but not admin ────────────────────────────────
+  // ── Connected but not admin ──────────────────────────────
   if (!isAdmin) {
     return (
       <div className="max-w-md mx-auto px-4 py-20 flex flex-col items-center text-center gap-5">
@@ -104,7 +184,7 @@ export default function AdminPage() {
     );
   }
 
-  // ── Admin view ────────────────────────────────────────────
+  // ── Admin view ───────────────────────────────────────────
   return (
     <div
       className="min-h-screen"
@@ -158,6 +238,7 @@ export default function AdminPage() {
           </div>
 
           <form onSubmit={handleCreate} className="flex flex-col gap-4">
+            {/* Question */}
             <div>
               <label
                 className="block text-xs font-semibold mb-2 uppercase tracking-wider"
@@ -171,7 +252,8 @@ export default function AdminPage() {
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 required
-                className="w-full rounded-xl py-3 px-4 text-sm outline-none"
+                disabled={isPending}
+                className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50"
                 style={{
                   backgroundColor: "#0B0E14",
                   border: "1px solid #1E2435",
@@ -179,10 +261,37 @@ export default function AdminPage() {
                   transition: "border-color 0.15s ease",
                 }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = "#00D08466")}
-                onBlur={(e) => (e.currentTarget.style.borderColor = "#1E2435")}
+                onBlur={(e)  => (e.currentTarget.style.borderColor = "#1E2435")}
               />
             </div>
 
+            {/* Category */}
+            <div>
+              <label
+                className="block text-xs font-semibold mb-2 uppercase tracking-wider"
+                style={{ color: "#8B93A7" }}
+              >
+                Category
+              </label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                disabled={isPending}
+                className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50"
+                style={{
+                  backgroundColor: "#0B0E14",
+                  border: "1px solid #1E2435",
+                  color: "#F2F4F7",
+                  colorScheme: "dark",
+                }}
+              >
+                {["General", "Crypto", "Sports", "Finance", "Politics", "Tech"].map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Resolution date */}
             <div>
               <label
                 className="block text-xs font-semibold mb-2 uppercase tracking-wider"
@@ -195,7 +304,8 @@ export default function AdminPage() {
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 required
-                className="w-full rounded-xl py-3 px-4 text-sm outline-none"
+                disabled={isPending}
+                className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50"
                 style={{
                   backgroundColor: "#0B0E14",
                   border: "1px solid #1E2435",
@@ -204,24 +314,63 @@ export default function AdminPage() {
                   transition: "border-color 0.15s ease",
                 }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = "#00D08466")}
-                onBlur={(e) => (e.currentTarget.style.borderColor = "#1E2435")}
+                onBlur={(e)  => (e.currentTarget.style.borderColor = "#1E2435")}
               />
             </div>
 
-            {successMsg && (
+            {/* Pending state */}
+            {isPending && (
               <div
-                className="rounded-lg px-4 py-2.5 text-sm font-medium flex items-center gap-2"
-                style={{ backgroundColor: "#00D08418", color: "#00D084", border: "1px solid #00D08433" }}
+                className="rounded-lg px-4 py-3 text-sm flex items-center gap-3"
+                style={{ backgroundColor: "#0D1829", border: "1px solid #1E3A5F", color: "#60A5FA" }}
               >
-                <span>✓</span> {successMsg}
+                <Loader2 size={15} className="animate-spin shrink-0" />
+                <span>{STEP_LABEL[pendingStep!]}</span>
+              </div>
+            )}
+
+            {/* Error */}
+            {errorMsg && !isPending && (
+              <div
+                className="rounded-lg px-4 py-3 text-sm"
+                style={{ backgroundColor: "#1A0F14", border: "1px solid #FF4D5E44", color: "#FF4D5E" }}
+              >
+                <p className="font-bold mb-0.5">Transaction failed</p>
+                <p className="opacity-80">{errorMsg}</p>
+              </div>
+            )}
+
+            {/* Success */}
+            {txHash && !isPending && (
+              <div
+                className="rounded-lg px-4 py-3 text-sm"
+                style={{ backgroundColor: "#00D08418", border: "1px solid #00D08433", color: "#00D084" }}
+              >
+                <p className="font-bold mb-1">✓ Market created on-chain</p>
+                <a
+                  href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs underline opacity-80 hover:opacity-100 font-mono break-all"
+                >
+                  {txHash}
+                </a>
               </div>
             )}
 
             <button
               type="submit"
-              className="btn-yes self-start px-6 py-2.5 rounded-xl text-sm font-bold"
+              disabled={isPending}
+              className="btn-yes self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              + Create Market
+              {isPending ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  Creating…
+                </>
+              ) : (
+                "+ Create Market"
+              )}
             </button>
           </form>
         </div>
