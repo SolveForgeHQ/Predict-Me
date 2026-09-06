@@ -2,44 +2,103 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
-  web:
+  changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
-    if: "contains(github.event.pull_request.changed_files, 'apps/web/') || contains(github.event.push.commits.*.modified, 'apps/web/')"
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      backend: ${{ steps.filter.outputs.backend }}
+      stellar: ${{ steps.filter.outputs.stellar }}
+      avalanche: ${{ steps.filter.outputs.avalanche }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'apps/web/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'pnpm-lock.yaml'
+            backend:
+              - 'backend/**'
+              - 'packages/**'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'pnpm-lock.yaml'
+            stellar:
+              - 'blockchain/stellar/**'
+            avalanche:
+              - 'blockchain/avalanche/**'
+
+  web:
+    name: Web CI (Next.js)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 10
-      - run: pnpm install
-      - run: pnpm --filter web build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type Check & Build
+        run: pnpm --filter web build
 
   backend:
+    name: Backend CI (Hono / Workers)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
-    if: "contains(github.event.pull_request.changed_files, 'backend/') || contains(github.event.push.commits.*.modified, 'backend/')"
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
+      - uses: pnpm/action-setup@v4
         with:
           version: 10
-      - run: pnpm install
-      # placeholder check since there is no test script yet
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Type Check
+        run: pnpm --filter backend exec tsc --noEmit
 
   stellar:
+    name: Stellar Soroban CI
+    needs: changes
+    if: needs.changes.outputs.stellar == 'true'
     runs-on: ubuntu-latest
-    if: "contains(github.event.pull_request.changed_files, 'blockchain/stellar/') || contains(github.event.push.commits.*.modified, 'blockchain/stellar/')"
     steps:
       - uses: actions/checkout@v4
-      # Placeholder for stellar-cli test
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'blockchain/stellar/contracts'
+      - name: Run Soroban Tests
+        run: cd blockchain/stellar/contracts && cargo test
 
   avalanche:
+    name: Avalanche Foundry CI
+    needs: changes
+    if: needs.changes.outputs.avalanche == 'true'
     runs-on: ubuntu-latest
-    if: "contains(github.event.pull_request.changed_files, 'blockchain/avalanche/') || contains(github.event.push.commits.*.modified, 'blockchain/avalanche/')"
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
-      - run: cd blockchain/avalanche/contracts && forge build
+      - name: Run Foundry Build
+        run: cd blockchain/avalanche/contracts && forge build
