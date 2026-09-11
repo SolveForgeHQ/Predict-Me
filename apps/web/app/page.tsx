@@ -1,12 +1,13 @@
 import MarketCard from "@/components/MarketCard";
 import HeroSlideshow from "@/components/HeroSlideshow";
 import MatchPrediction from "@/components/MatchPrediction";
-import { loadAllMarkets } from "@/lib/markets";
+import StatusBanner from "@/components/StatusBanner";
+import { loadMarketsWithSource } from "@/lib/markets";
 
 export const revalidate = 15; // Revalidate dynamic markets cache every 15 seconds
 
 export default async function HomePage() {
-  const markets = await loadAllMarkets();
+  const { markets, source } = await loadMarketsWithSource();
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-5 pb-6">
@@ -20,6 +21,11 @@ export default async function HomePage() {
       <div className="mb-6">
         <MatchPrediction />
       </div>
+
+      {/* ── Backend Fallback Banner ──────────────────────────── */}
+      {source === "chain" && (
+        <StatusBanner variant="backend_offline" />
+      )}
 
       {/* ── All Markets section header ───────────────────────── */}
       <div className="flex items-center gap-3 mb-4">

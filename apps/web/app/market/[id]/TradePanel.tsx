@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { Market } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
+import { useToast } from "@/context/ToastContext";
 import { buyShares, ContractError } from "@/lib/contract";
-import { Wallet, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import StatusBanner from "@/components/StatusBanner";
+import { Wallet, Loader2 } from "lucide-react";
 
 interface Props {
   market: Market;
@@ -20,6 +22,7 @@ const STEP_LABEL: Record<PendingStep, string> = {
 
 export default function TradePanel({ market }: Props) {
   const { publicKey, connected, connecting, connect } = useWallet();
+  const toast = useToast();
   const [tab, setTab] = useState<"YES" | "NO">("YES");
   const [yesAmount, setYesAmount] = useState("");
   const [noAmount, setNoAmount] = useState("");
@@ -79,30 +82,34 @@ export default function TradePanel({ market }: Props) {
       clearTimeout(confirmingTimer);
 
       setTxHash(hash);
+      toast.success("Trade Confirmed!", `Successfully purchased ${tab} shares on-chain.`);
       if (isYes) setYesAmount("");
       else setNoAmount("");
     } catch (err) {
+      let message = "Failed to execute trade.";
       if (err instanceof ContractError) {
         switch (err.code) {
           case "NOT_CONFIGURED":
-            setErrorMsg("Contract not configured. Please set NEXT_PUBLIC_MARKET_CONTRACT_ID and NEXT_PUBLIC_SOROBAN_RPC_URL in .env.local.");
+            message = "Contract not configured. Please set NEXT_PUBLIC_MARKET_CONTRACT_ID in .env.local.";
             break;
           case "SIGN_REJECTED":
-            setErrorMsg("Transaction was rejected in your wallet.");
+            message = "Transaction was rejected in your wallet.";
             break;
           case "SIMULATION_FAILED":
-            setErrorMsg(`Simulation failed: ${err.message}`);
+            message = `Simulation failed: ${err.message}`;
             break;
           case "SUBMIT_FAILED":
-            setErrorMsg(`Transaction failed on-chain: ${err.message}`);
+            message = `Transaction failed on-chain: ${err.message}`;
             break;
           default:
-            setErrorMsg(err.message);
+            message = err.message;
         }
-      } else {
-        setErrorMsg("Failed to execute trade. Check console for details.");
-        console.error("[TradePanel] buyShares error:", err);
+      } else if (err instanceof Error) {
+        message = err.message;
       }
+      setErrorMsg(message);
+      toast.error("Trade Failed", message);
+      console.error("[TradePanel] buyShares error:", err);
     } finally {
       setPendingStep(null);
     }
@@ -222,60 +229,21 @@ export default function TradePanel({ market }: Props) {
 
         {/* Pending step indicator */}
         {isPending && (
-          <div
-            className="rounded-xl px-4 py-3 text-xs flex items-center gap-2.5"
-            style={{
-              backgroundColor: "#0D1829",
-              border: "1px solid #1E3A5F",
-              color: "#60A5FA",
-            }}
-          >
-            <Loader2 size={14} className="animate-spin shrink-0" />
-            <span className="font-medium">{STEP_LABEL[pendingStep!]}</span>
-          </div>
+          <StatusBanner variant="pending" stepLabel={STEP_LABEL[pendingStep!]} />
         )}
 
         {/* Inline error display */}
         {errorMsg && !isPending && (
-          <div
-            className="rounded-xl px-4 py-3 text-xs flex items-start gap-2.5 leading-relaxed"
-            style={{
-              backgroundColor: "#1A0F14",
-              border: "1px solid #FF4D5E44",
-              color: "#FF4D5E",
-            }}
-          >
-            <AlertCircle size={15} className="shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold">Trade Failed</p>
-              <p className="opacity-90">{errorMsg}</p>
-            </div>
-          </div>
+          <StatusBanner variant="error" title="Trade Failed" message={errorMsg} />
         )}
 
         {/* Success confirmation */}
         {txHash && !isPending && (
-          <div
-            className="rounded-xl px-4 py-3 text-xs flex items-start gap-2.5 leading-relaxed"
-            style={{
-              backgroundColor: "#00D08418",
-              border: "1px solid #00D08433",
-              color: "#00D084",
-            }}
-          >
-            <CheckCircle2 size={15} className="shrink-0 mt-0.5" />
-            <div className="min-w-0">
-              <p className="font-bold">Shares purchased successfully!</p>
-              <a
-                href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline opacity-80 hover:opacity-100 font-mono break-all text-[11px]"
-              >
-                View on Stellar Expert ↗
-              </a>
-            </div>
-          </div>
+          <StatusBanner
+            variant="success"
+            title="Shares purchased successfully!"
+            txHash={txHash}
+          />
         )}
 
         {/* Buy / Connect button */}

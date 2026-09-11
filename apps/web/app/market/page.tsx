@@ -2,13 +2,15 @@
 
 import { useState, useEffect } from "react";
 import MarketCard from "@/components/MarketCard";
-import { Market, MARKETS, loadAllMarkets } from "@/lib/markets";
+import { Market, MARKETS, loadMarketsWithSource } from "@/lib/markets";
+import StatusBanner from "@/components/StatusBanner";
 import { Search, TrendingUp, RefreshCw } from "lucide-react";
 
 const CATEGORIES = ["All", "Crypto", "Sports", "Finance", "Tech"] as const;
 
 export default function MarketsPage() {
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
+  const [source, setSource] = useState<"backend" | "chain" | "fallback">("backend");
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
@@ -16,9 +18,10 @@ export default function MarketsPage() {
   const refreshMarkets = async () => {
     setIsLoading(true);
     try {
-      const data = await loadAllMarkets();
-      if (data && data.length > 0) {
-        setMarkets(data);
+      const res = await loadMarketsWithSource();
+      if (res.markets && res.markets.length > 0) {
+        setMarkets(res.markets);
+        setSource(res.source);
       }
     } catch (err) {
       console.warn("Failed to load markets:", err);
@@ -72,6 +75,11 @@ export default function MarketsPage() {
           </span>
         </div>
       </div>
+
+      {/* Backend unreachable fallback banner */}
+      {source === "chain" && (
+        <StatusBanner variant="backend_offline" />
+      )}
 
       {/* Search Input */}
       <div

@@ -94,19 +94,21 @@ export function timeRemaining(endsAt: string): string {
   return `${hours}h ${mins}m remaining`;
 }
 
+export interface MarketLoadResult {
+  markets: Market[];
+  source: "backend" | "chain" | "fallback";
+}
+
 /**
- * Loads all markets:
- * 1. Primary: Fetches from backend GET /markets (cached on edge)
- * 2. Fallback: Directly fetches on-chain from Soroban contract RPC
- * 3. Default: Returns initial baseline markets
+ * Loads all markets and reports data source (backend, direct chain, or fallback).
  */
-export async function loadAllMarkets(): Promise<Market[]> {
+export async function loadMarketsWithSource(): Promise<MarketLoadResult> {
   // 1. Primary: Backend GET /markets
   try {
     const { apiFetch } = await import("@/lib/api");
     const data = await apiFetch<{ markets?: any[] }>("/markets");
     if (data && Array.isArray(data.markets) && data.markets.length > 0) {
-      return data.markets.map((m) => {
+      const mapped = data.markets.map((m) => {
         const yesPool = Number(m.yesPool ?? 0);
         const noPool = Number(m.noPool ?? 0);
         const total = yesPool + noPool;
@@ -130,6 +132,7 @@ export async function loadAllMarkets(): Promise<Market[]> {
           status,
         };
       });
+      return { markets: mapped, source: "backend" };
     }
   } catch (err) {
     console.warn("Backend GET /markets failed, falling back to direct contract call:", err);
@@ -140,13 +143,24 @@ export async function loadAllMarkets(): Promise<Market[]> {
     const { fetchMarkets } = await import("@/lib/contract");
     const onChainMarkets = await fetchMarkets();
     if (onChainMarkets && onChainMarkets.length > 0) {
-      return onChainMarkets;
+      return { markets: onChainMarkets, source: "chain" };
     }
   } catch (chainErr) {
     console.warn("Direct contract fetch failed, using fallback markets:", chainErr);
   }
 
   // 3. Baseline mock fallback
-  return MARKETS;
+  return { markets: MARKETS, source: "fallback" };
+}
+
+/**
+ * Loads all markets:
+ * 1. Primary: Fetches from backend GET /markets (cached on edge)
+ * 2. Fallback: Directly fetches on-chain from Soroban contract RPC
+ * 3. Default: Returns initial baseline markets
+ */
+export async function loadAllMarkets(): Promise<Market[]> {
+  const result = await loadMarketsWithSource();
+  return result.markets;
 }
 

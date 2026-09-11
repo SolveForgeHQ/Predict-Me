@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
+import { useToast } from "@/context/ToastContext";
 import { createMarket, resolveMarket, ContractError } from "@/lib/contract";
-import { Wallet, ShieldOff, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import StatusBanner from "@/components/StatusBanner";
+import { Wallet, ShieldOff, Loader2 } from "lucide-react";
 
 // Hardcoded owner address — set NEXT_PUBLIC_ADMIN_ADDRESS in .env.local to override
 const ADMIN_ADDRESS =
@@ -33,6 +35,7 @@ interface ResolvingState {
 
 export default function AdminPage() {
   const { publicKey, connected, connecting, connect } = useWallet();
+  const toast = useToast();
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
 
   // Form fields
@@ -63,7 +66,6 @@ export default function AdminPage() {
     setTxHash("");
 
     try {
-      // The contract wants Unix seconds, not milliseconds
       const endTimestampSec = Math.floor(new Date(endDate).getTime() / 1000);
 
       setPendingStep("simulating");
@@ -85,6 +87,7 @@ export default function AdminPage() {
       clearTimeout(confirmingTimer);
 
       setTxHash(hash);
+      toast.success("Market Created!", "Market has been registered on-chain.");
       setQuestion("");
       setEndDate("");
       setCategory("General");
@@ -102,27 +105,30 @@ export default function AdminPage() {
       };
       setMarkets((prev) => [newMarket, ...prev]);
     } catch (err) {
+      let message = "Failed to create market.";
       if (err instanceof ContractError) {
         switch (err.code) {
           case "NOT_CONFIGURED":
-            setErrorMsg("Contract not configured. Set NEXT_PUBLIC_MARKET_CONTRACT_ID and NEXT_PUBLIC_SOROBAN_RPC_URL in .env.local.");
+            message = "Contract not configured. Set NEXT_PUBLIC_MARKET_CONTRACT_ID and NEXT_PUBLIC_SOROBAN_RPC_URL in .env.local.";
             break;
           case "SIGN_REJECTED":
-            setErrorMsg("Transaction was rejected in your wallet. No changes were made.");
+            message = "Transaction was rejected in your wallet. No changes were made.";
             break;
           case "SIMULATION_FAILED":
-            setErrorMsg(`Simulation failed: ${err.message}`);
+            message = `Simulation failed: ${err.message}`;
             break;
           case "SUBMIT_FAILED":
-            setErrorMsg(`Transaction failed on-chain: ${err.message}`);
+            message = `Transaction failed on-chain: ${err.message}`;
             break;
           default:
-            setErrorMsg(err.message);
+            message = err.message;
         }
-      } else {
-        setErrorMsg("Unexpected error. Check the browser console for details.");
-        console.error("[admin] createMarket error:", err);
+      } else if (err instanceof Error) {
+        message = err.message;
       }
+      setErrorMsg(message);
+      toast.error("Market Creation Failed", message);
+      console.error("[admin] createMarket error:", err);
     } finally {
       setPendingStep(null);
     }
@@ -155,6 +161,7 @@ export default function AdminPage() {
       clearTimeout(confirmingTimer);
 
       setResolveSuccess({ marketId, txHash: hash, outcome });
+      toast.success("Market Resolved!", `Market resolved ${outcome} on-chain.`);
 
       // Update market status in UI once confirmed on-chain
       const newStatus = outcome === "YES" ? "resolved_yes" : "resolved_no";
@@ -181,6 +188,7 @@ export default function AdminPage() {
         message = err.message;
       }
       setResolveError({ marketId, message });
+      toast.error("Resolution Failed", message);
     } finally {
       setResolvingState(null);
     }
@@ -380,45 +388,21 @@ export default function AdminPage() {
 
             {/* Pending state */}
             {isPending && (
-              <div
-                className="rounded-lg px-4 py-3 text-sm flex items-center gap-3"
-                style={{ backgroundColor: "#0D1829", border: "1px solid #1E3A5F", color: "#60A5FA" }}
-              >
-                <Loader2 size={15} className="animate-spin shrink-0" />
-                <span>{STEP_LABEL[pendingStep!]}</span>
-              </div>
+              <StatusBanner variant="pending" stepLabel={STEP_LABEL[pendingStep!]} />
             )}
 
             {/* Error */}
             {errorMsg && !isPending && (
-              <div
-                className="rounded-lg px-4 py-3 text-sm flex items-start gap-2.5"
-                style={{ backgroundColor: "#1A0F14", border: "1px solid #FF4D5E44", color: "#FF4D5E" }}
-              >
-                <AlertCircle size={15} className="shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold mb-0.5">Transaction failed</p>
-                  <p className="opacity-90 text-xs">{errorMsg}</p>
-                </div>
-              </div>
+              <StatusBanner variant="error" title="Creation Failed" message={errorMsg} />
             )}
 
             {/* Success */}
             {txHash && !isPending && (
-              <div
-                className="rounded-lg px-4 py-3 text-sm"
-                style={{ backgroundColor: "#00D08418", border: "1px solid #00D08433", color: "#00D084" }}
-              >
-                <p className="font-bold mb-1">✓ Market created on-chain</p>
-                <a
-                  href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs underline opacity-80 hover:opacity-100 font-mono break-all"
-                >
-                  {txHash}
-                </a>
-              </div>
+              <StatusBanner
+                variant="success"
+                title="Market created on-chain!"
+                txHash={txHash}
+              />
             )}
 
             <button
@@ -556,33 +540,23 @@ export default function AdminPage() {
 
                 {/* Resolution error */}
                 {hasError && (
-                  <div
-                    className="mt-3 rounded-lg px-3 py-2 text-xs flex items-center gap-2"
-                    style={{ backgroundColor: "#1A0F14", border: "1px solid #FF4D5E44", color: "#FF4D5E" }}
-                  >
-                    <AlertCircle size={13} className="shrink-0" />
-                    <span>{resolveError.message}</span>
+                  <div className="mt-3">
+                    <StatusBanner
+                      variant="error"
+                      title="Resolution Failed"
+                      message={resolveError.message}
+                    />
                   </div>
                 )}
 
                 {/* Resolution success */}
                 {hasSuccess && (
-                  <div
-                    className="mt-3 rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2"
-                    style={{ backgroundColor: "#00D08418", border: "1px solid #00D08433", color: "#00D084" }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 size={13} className="shrink-0" />
-                      <span>Market resolved {resolveSuccess.outcome} on-chain!</span>
-                    </div>
-                    <a
-                      href={`https://stellar.expert/explorer/testnet/tx/${resolveSuccess.txHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline font-mono text-[11px] opacity-80 hover:opacity-100"
-                    >
-                      View Tx ↗
-                    </a>
+                  <div className="mt-3">
+                    <StatusBanner
+                      variant="success"
+                      title={`Market resolved ${resolveSuccess.outcome} on-chain!`}
+                      txHash={resolveSuccess.txHash}
+                    />
                   </div>
                 )}
               </div>

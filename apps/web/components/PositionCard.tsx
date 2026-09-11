@@ -3,8 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { Market } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
+import { useToast } from "@/context/ToastContext";
 import { fetchPosition, claimWinnings, ContractError } from "@/lib/contract";
-import { Loader2, AlertCircle, CheckCircle2, Gift, RefreshCw } from "lucide-react";
+import StatusBanner from "@/components/StatusBanner";
+import { Loader2, Gift, RefreshCw } from "lucide-react";
 
 interface Props {
   market: Market;
@@ -19,7 +21,8 @@ const STEP_LABEL: Record<PendingStep, string> = {
 };
 
 export default function PositionCard({ market }: Props) {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, connect } = useWallet();
+  const toast = useToast();
   const [yesShares, setYesShares] = useState<number>(0);
   const [noShares, setNoShares] = useState<number>(0);
   const [isLoadingPosition, setIsLoadingPosition] = useState(false);
@@ -89,32 +92,34 @@ export default function PositionCard({ market }: Props) {
       clearTimeout(confirmingTimer);
 
       setTxHash(hash);
+      toast.success("Winnings Claimed!", `Claimed ${winningShares} winning ${winningSide} shares.`);
 
       // Refresh on-chain balance after claim
       await loadPosition();
     } catch (err) {
+      let message = "Failed to claim winnings.";
       if (err instanceof ContractError) {
         switch (err.code) {
           case "NOT_CONFIGURED":
-            setErrorMsg("Contract not configured. Please check environment variables.");
+            message = "Contract not configured. Please check environment variables.";
             break;
           case "SIGN_REJECTED":
-            setErrorMsg("Claim transaction was rejected in your wallet.");
+            message = "Claim transaction was rejected in your wallet.";
             break;
           case "SIMULATION_FAILED":
-            setErrorMsg(`Simulation error: ${err.message}`);
+            message = `Simulation error: ${err.message}`;
             break;
           case "SUBMIT_FAILED":
-            setErrorMsg(`On-chain error: ${err.message}`);
+            message = `On-chain error: ${err.message}`;
             break;
           default:
-            setErrorMsg(err.message);
+            message = err.message;
         }
       } else if (err instanceof Error) {
-        setErrorMsg(err.message);
-      } else {
-        setErrorMsg("Failed to claim winnings.");
+        message = err.message;
       }
+      setErrorMsg(message);
+      toast.error("Claim Failed", message);
     } finally {
       setPendingStep(null);
     }
@@ -162,7 +167,7 @@ export default function PositionCard({ market }: Props) {
       </div>
 
       {/* Share balances */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 mb-4">
         {/* YES */}
         <div
           className="rounded-xl p-3.5"
@@ -216,10 +221,10 @@ export default function PositionCard({ market }: Props) {
 
       {/* Claim Winnings Section */}
       {connected && hasWinningPosition && (
-        <div className="mt-4 pt-4" style={{ borderTop: "1px solid #1E2435" }}>
+        <div className="pt-3" style={{ borderTop: "1px solid #1E2435" }}>
           <div className="flex items-center justify-between mb-3 text-xs">
             <span style={{ color: "#8B93A7" }}>Claimable Outcome:</span>
-            <span className="font-bold" style={{ color: "#00D084" }}>
+            <span className="font-bold text-[#00D084]">
               {winningShares} Winning {winningSide} Shares
             </span>
           </div>
@@ -227,7 +232,7 @@ export default function PositionCard({ market }: Props) {
           <button
             onClick={handleClaim}
             disabled={isPending}
-            className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all"
+            className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
             style={{
               backgroundColor: "#00D084",
               color: "#0B0E14",
@@ -249,55 +254,48 @@ export default function PositionCard({ market }: Props) {
         </div>
       )}
 
+      {/* Pending status banner */}
+      {isPending && (
+        <div className="mt-3">
+          <StatusBanner variant="pending" stepLabel={STEP_LABEL[pendingStep!]} />
+        </div>
+      )}
+
       {/* Inline claim error */}
       {errorMsg && !isPending && (
-        <div
-          className="mt-3 rounded-xl px-3.5 py-2.5 text-xs flex items-start gap-2"
-          style={{ backgroundColor: "#1A0F14", border: "1px solid #FF4D5E44", color: "#FF4D5E" }}
-        >
-          <AlertCircle size={14} className="shrink-0 mt-0.5" />
-          <div>
-            <p className="font-bold">Claim Failed</p>
-            <p className="opacity-90">{errorMsg}</p>
-          </div>
+        <div className="mt-3">
+          <StatusBanner variant="error" title="Claim Failed" message={errorMsg} />
         </div>
       )}
 
       {/* Inline claim success */}
       {txHash && !isPending && (
-        <div
-          className="mt-3 rounded-xl px-3.5 py-2.5 text-xs flex items-start gap-2"
-          style={{ backgroundColor: "#00D08418", border: "1px solid #00D08433", color: "#00D084" }}
-        >
-          <CheckCircle2 size={14} className="shrink-0 mt-0.5" />
-          <div className="min-w-0">
-            <p className="font-bold">Winnings claimed successfully!</p>
-            <a
-              href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline font-mono text-[11px] opacity-80 hover:opacity-100 break-all"
-            >
-              View on Stellar Expert ↗
-            </a>
-          </div>
+        <div className="mt-3">
+          <StatusBanner
+            variant="success"
+            title="Winnings claimed successfully!"
+            txHash={txHash}
+          />
         </div>
       )}
 
       {!connected && (
-        <p className="text-xs text-center mt-4" style={{ color: "#8B93A7" }}>
-          Connect your wallet to see your live on-chain positions.
-        </p>
+        <StatusBanner
+          variant="wallet_required"
+          message="Connect your wallet to see your live on-chain positions."
+          onAction={connect}
+          actionLabel="Connect"
+        />
       )}
 
       {connected && isResolved && !hasWinningPosition && !txHash && (
-        <p className="text-xs text-center mt-4" style={{ color: "#8B93A7" }}>
+        <p className="text-xs text-center text-[#8B93A7]">
           No winning shares to claim for this market.
         </p>
       )}
 
       {connected && !isResolved && (
-        <p className="text-xs text-center mt-4" style={{ color: "#8B93A7" }}>
+        <p className="text-xs text-center text-[#8B93A7]">
           Live on-chain balance. Winnings can be claimed after resolution.
         </p>
       )}
