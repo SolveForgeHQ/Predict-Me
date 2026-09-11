@@ -93,3 +93,60 @@ export function timeRemaining(endsAt: string): string {
   const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
   return `${hours}h ${mins}m remaining`;
 }
+
+/**
+ * Loads all markets:
+ * 1. Primary: Fetches from backend GET /markets (cached on edge)
+ * 2. Fallback: Directly fetches on-chain from Soroban contract RPC
+ * 3. Default: Returns initial baseline markets
+ */
+export async function loadAllMarkets(): Promise<Market[]> {
+  // 1. Primary: Backend GET /markets
+  try {
+    const { apiFetch } = await import("@/lib/api");
+    const data = await apiFetch<{ markets?: any[] }>("/markets");
+    if (data && Array.isArray(data.markets) && data.markets.length > 0) {
+      return data.markets.map((m) => {
+        const yesPool = Number(m.yesPool ?? 0);
+        const noPool = Number(m.noPool ?? 0);
+        const total = yesPool + noPool;
+        const yesPercent = total > 0 ? Math.round((yesPool / total) * 100) : 50;
+        const noPercent = total > 0 ? 100 - yesPercent : 50;
+        const status: MarketStatus =
+          m.status === "open"
+            ? "open"
+            : m.resolvedOutcome === "no"
+            ? "resolved_no"
+            : "resolved_yes";
+
+        return {
+          id: String(m.id),
+          question: String(m.question),
+          category: String(m.category ?? "General"),
+          yesPercent,
+          noPercent,
+          totalPool: total,
+          endsAt: typeof m.endTime === "number" ? new Date(m.endTime).toISOString() : String(m.endTime),
+          status,
+        };
+      });
+    }
+  } catch (err) {
+    console.warn("Backend GET /markets failed, falling back to direct contract call:", err);
+  }
+
+  // 2. Secondary fallback: Query Soroban contract directly
+  try {
+    const { fetchMarkets } = await import("@/lib/contract");
+    const onChainMarkets = await fetchMarkets();
+    if (onChainMarkets && onChainMarkets.length > 0) {
+      return onChainMarkets;
+    }
+  } catch (chainErr) {
+    console.warn("Direct contract fetch failed, using fallback markets:", chainErr);
+  }
+
+  // 3. Baseline mock fallback
+  return MARKETS;
+}
+

@@ -1,17 +1,37 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import MarketCard from "@/components/MarketCard";
-import { MARKETS } from "@/lib/markets";
-import { Search, TrendingUp } from "lucide-react";
+import { Market, MARKETS, loadAllMarkets } from "@/lib/markets";
+import { Search, TrendingUp, RefreshCw } from "lucide-react";
 
 const CATEGORIES = ["All", "Crypto", "Sports", "Finance", "Tech"] as const;
 
 export default function MarketsPage() {
+  const [markets, setMarkets] = useState<Market[]>(MARKETS);
+  const [isLoading, setIsLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredMarkets = MARKETS.filter((m) => {
+  const refreshMarkets = async () => {
+    setIsLoading(true);
+    try {
+      const data = await loadAllMarkets();
+      if (data && data.length > 0) {
+        setMarkets(data);
+      }
+    } catch (err) {
+      console.warn("Failed to load markets:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshMarkets();
+  }, []);
+
+  const filteredMarkets = markets.filter((m) => {
     const matchesCategory =
       selectedCategory === "All" || m.category.toLowerCase() === selectedCategory.toLowerCase();
     const matchesSearch =
@@ -35,12 +55,22 @@ export default function MarketsPage() {
             Trade outcomes and predict the future on Stellar.
           </p>
         </div>
-        <span
-          className="text-xs font-semibold px-2.5 py-1 rounded-full"
-          style={{ backgroundColor: "#00D08420", color: "#00D084" }}
-        >
-          {MARKETS.length} live
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={refreshMarkets}
+            disabled={isLoading}
+            title="Refresh markets"
+            className="p-1.5 rounded-lg bg-[#161B26] border border-[#1E2435] text-[#8B93A7] hover:text-[#F2F4F7] transition-colors"
+          >
+            <RefreshCw size={13} className={isLoading ? "animate-spin text-[#00D084]" : ""} />
+          </button>
+          <span
+            className="text-xs font-semibold px-2.5 py-1 rounded-full"
+            style={{ backgroundColor: "#00D08420", color: "#00D084" }}
+          >
+            {markets.length} live
+          </span>
+        </div>
       </div>
 
       {/* Search Input */}

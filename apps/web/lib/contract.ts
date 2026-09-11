@@ -190,9 +190,88 @@ export async function createMarket(
 
 // ── Stubs — not yet implemented ───────────────────────────────
 
+/**
+ * Fetches all markets directly from the Soroban contract via RPC.
+ */
 export async function fetchMarkets(): Promise<Market[] | null> {
-  console.warn("contract.ts: fetchMarkets() not yet implemented");
-  return null;
+  if (!isConfigured()) {
+    return null;
+  }
+
+  const server = getServer();
+  const contract = new Contract(CONTRACT_ID);
+
+  try {
+    let marketCount = 0;
+    try {
+      const countKey = xdr.ScVal.scvVec([
+        nativeToScVal("MarketCount", { type: "symbol" }),
+      ]);
+      const entry = await server.getContractData(
+        contract.address(),
+        countKey,
+        rpc.Durability.Instance
+      );
+      if (entry && entry.val) {
+        const val = scValToNative(entry.val.contractData().val());
+        if (typeof val === "number") marketCount = val;
+        else if (typeof val === "bigint") marketCount = Number(val);
+      }
+    } catch {
+      marketCount = 0;
+    }
+
+    if (marketCount === 0) return null;
+
+    const list: Market[] = [];
+    for (let id = 1; id <= marketCount; id++) {
+      try {
+        const marketKey = xdr.ScVal.scvVec([
+          nativeToScVal("Market", { type: "symbol" }),
+          nativeToScVal(id, { type: "u32" }),
+        ]);
+        const entry = await server.getContractData(
+          contract.address(),
+          marketKey,
+          rpc.Durability.Persistent
+        );
+        if (entry && entry.val) {
+          const state = scValToNative(entry.val.contractData().val());
+          if (state) {
+            const rawStatus = Number(state.status ?? 0);
+            const status: MarketStatus =
+              rawStatus === 0 ? "open" : rawStatus === 1 ? "resolved_yes" : "resolved_no";
+            const yesPool = state.yes_pool ? Number(state.yes_pool) / 10_000_000 : 0;
+            const noPool = state.no_pool ? Number(state.no_pool) / 10_000_000 : 0;
+            const total = yesPool + noPool;
+            const yesPercent = total > 0 ? Math.round((yesPool / total) * 100) : 50;
+            const noPercent = total > 0 ? 100 - yesPercent : 50;
+            const endsAt = state.end_timestamp
+              ? new Date(Number(state.end_timestamp) * 1000).toISOString()
+              : new Date(Date.now() + 86400000).toISOString();
+
+            list.push({
+              id: String(id),
+              question: String(state.question ?? `Market #${id}`),
+              category: String(state.category ?? "General"),
+              yesPercent,
+              noPercent,
+              totalPool: total,
+              endsAt,
+              status,
+            });
+          }
+        }
+      } catch {
+        // Skip single errored market
+      }
+    }
+
+    return list.length > 0 ? list : null;
+  } catch (err) {
+    console.warn("contract.ts: fetchMarkets failed:", err);
+    return null;
+  }
 }
 
 export async function fetchMarket(marketId: string): Promise<Market | null> {

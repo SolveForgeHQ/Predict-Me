@@ -1,9 +1,13 @@
 import MarketCard from "@/components/MarketCard";
 import HeroSlideshow from "@/components/HeroSlideshow";
 import MatchPrediction from "@/components/MatchPrediction";
-import { MARKETS } from "@/lib/markets";
+import { loadAllMarkets } from "@/lib/markets";
 
-export default function HomePage() {
+export const revalidate = 15; // Revalidate dynamic markets cache every 15 seconds
+
+export default async function HomePage() {
+  const markets = await loadAllMarkets();
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-5 pb-6">
 
@@ -26,7 +30,7 @@ export default function HomePage() {
           className="text-xs font-semibold px-2 py-0.5 rounded-full"
           style={{ backgroundColor: "#00D08420", color: "#00D084" }}
         >
-          {MARKETS.length} active
+          {markets.length} active
         </span>
         <div
           className="flex-1 h-px"
@@ -36,7 +40,7 @@ export default function HomePage() {
 
       {/* ── Market grid ──────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3">
-        {MARKETS.map((market) => (
+        {markets.map((market) => (
           <MarketCard key={market.id} market={market} />
         ))}
       </div>
