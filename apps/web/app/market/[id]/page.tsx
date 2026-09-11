@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { MARKETS, getMarket, formatPool, timeRemaining } from "@/lib/markets";
 import TradePanel from "./TradePanel";
+import PositionCard from "@/components/PositionCard";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -220,43 +221,8 @@ export default async function MarketPage({ params }: Props) {
           <div className="lg:sticky lg:top-28 flex flex-col gap-5">
             <TradePanel market={market} />
 
-            {/* Position card */}
-            <div
-              className="rounded-2xl p-5"
-              style={{
-                background: "linear-gradient(135deg, #161B26, #131820)",
-                border: "1px solid #1E2435",
-              }}
-            >
-              <h2 className="text-sm font-bold mb-4" style={{ color: "#F2F4F7" }}>
-                Your Position
-              </h2>
-              <div className="grid grid-cols-2 gap-3">
-                <div
-                  className="rounded-xl p-3.5"
-                  style={{ backgroundColor: "#0B0E14", border: "1px solid #00D08433" }}
-                >
-                  <p className="text-xs font-semibold mb-1.5" style={{ color: "#00D084" }}>
-                    YES Shares
-                  </p>
-                  <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>0</p>
-                  <p className="text-xs mt-1" style={{ color: "#8B93A7" }}>Avg. price: —</p>
-                </div>
-                <div
-                  className="rounded-xl p-3.5"
-                  style={{ backgroundColor: "#0B0E14", border: "1px solid #FF4D5E33" }}
-                >
-                  <p className="text-xs font-semibold mb-1.5" style={{ color: "#FF4D5E" }}>
-                    NO Shares
-                  </p>
-                  <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>0</p>
-                  <p className="text-xs mt-1" style={{ color: "#8B93A7" }}>Avg. price: —</p>
-                </div>
-              </div>
-              <p className="text-xs text-center mt-4" style={{ color: "#8B93A7" }}>
-                Connect your wallet to see real positions.
-              </p>
-            </div>
+            {/* Position card & Claim Winnings */}
+            <PositionCard market={market} />
           </div>
         </div>
       </div>

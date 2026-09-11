@@ -279,7 +279,31 @@ export async function resolveMarket(
   return invokeContract(callerPublicKey, "resolve_market", args);
 }
 
-export async function claimWinnings(marketId: string): Promise<string | null> {
-  console.warn("contract.ts: claimWinnings() not yet implemented", marketId);
-  return null;
+/**
+ * Calls claim_winnings(market_id) on the contract.
+ *
+ * Contract signature (contracts/src/lib.rs):
+ *   claim_winnings(env, market_id: u32)
+ *
+ * @param callerPublicKey — connected wallet public key
+ * @param marketId        — market ID (converted to u32)
+ * @returns transaction hash
+ * @throws ContractError
+ */
+export async function claimWinnings(
+  callerPublicKey: string,
+  marketId: string | number
+): Promise<string> {
+  if (!callerPublicKey) {
+    throw new ContractError("WALLET_REQUIRED", "Wallet must be connected to claim winnings.");
+  }
+
+  const marketIdNum = typeof marketId === "number" ? marketId : parseInt(marketId, 10) || 1;
+
+  const args: xdr.ScVal[] = [
+    nativeToScVal(marketIdNum, { type: "u32" }),
+  ];
+
+  return invokeContract(callerPublicKey, "claim_winnings", args);
 }
+
