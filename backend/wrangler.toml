@@ -6,6 +6,8 @@ main = "src/index.ts"
 #   wrangler secret put JWT_SECRET
 [vars]
 JWT_SECRET = "dev-secret-change-me-in-production"
+SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org"
+MARKET_CONTRACT_ID = ""
 
 [observability]
 enabled = true

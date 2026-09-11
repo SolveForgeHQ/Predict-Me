@@ -23,7 +23,12 @@ export const quests = sqliteTable('quests', {
 
 export const marketCache = sqliteTable('market_cache', {
   id: text('id').primaryKey(),
-  title: text('title'),
-  description: text('description'),
-  endDate: integer('end_date'),
+  question: text('question').notNull(),
+  category: text('category'),
+  endTime: integer('end_time').notNull(),
+  status: text('status').notNull(),
+  yesPool: real('yes_pool').default(0),
+  noPool: real('no_pool').default(0),
+  resolvedOutcome: text('resolved_outcome'),
+  updatedAt: integer('updated_at').notNull(),
 });
