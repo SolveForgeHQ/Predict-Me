@@ -16,6 +16,7 @@ import {
   Networks,
   BASE_FEE,
   nativeToScVal,
+  scValToNative,
   xdr,
   Account,
 } from "@stellar/stellar-sdk";
@@ -199,13 +200,77 @@ export async function fetchMarket(marketId: string): Promise<Market | null> {
   return null;
 }
 
+/**
+ * Reads the YES and NO share balances for a given wallet and market directly from the contract.
+ *
+ * @param callerPublicKey — connected wallet public key
+ * @param marketId        — market ID
+ * @returns Position object with yesShares and noShares
+ */
 export async function fetchPosition(
-  marketId: string,
-  publicKey: string
+  callerPublicKey: string,
+  marketId: string | number
 ): Promise<Position | null> {
-  console.warn("contract.ts: fetchPosition() not yet implemented", marketId, publicKey);
-  return null;
+  if (!callerPublicKey || !isConfigured()) {
+    return null;
+  }
+
+  const marketIdNum = typeof marketId === "number" ? marketId : parseInt(marketId, 10) || 1;
+  const server = getServer();
+  const contract = new Contract(CONTRACT_ID);
+
+  try {
+    async function readSharesForSide(side: 0 | 1): Promise<number> {
+      try {
+        // DataKey::Shares(u32, Address, u32)
+        const keyVal = xdr.ScVal.scvVec([
+          nativeToScVal("Shares", { type: "symbol" }),
+          nativeToScVal(marketIdNum, { type: "u32" }),
+          nativeToScVal(callerPublicKey, { type: "address" }),
+          nativeToScVal(side, { type: "u32" }),
+        ]);
+
+        const ledgerEntry = await server.getContractData(
+          contract.address(),
+          keyVal,
+          rpc.Durability.Persistent
+        );
+
+        if (ledgerEntry && ledgerEntry.val) {
+          const val = scValToNative(ledgerEntry.val.contractData().val());
+          if (typeof val === "bigint" || typeof val === "number") {
+            // Amount is in stroops (1 XLM = 10^7 stroops)
+            return Number(val) / 10_000_000;
+          }
+        }
+      } catch {
+        // Entry not present on ledger indicates 0 shares
+      }
+      return 0;
+    }
+
+    const [yesShares, noShares] = await Promise.all([
+      readSharesForSide(0),
+      readSharesForSide(1),
+    ]);
+
+    return {
+      yesShares,
+      noShares,
+      avgYesPrice: null,
+      avgNoPrice: null,
+    };
+  } catch (err) {
+    console.warn("fetchPosition failed:", err);
+    return {
+      yesShares: 0,
+      noShares: 0,
+      avgYesPrice: null,
+      avgNoPrice: null,
+    };
+  }
 }
+
 
 /**
  * Calls buy_shares(market_id, side, amount) on the contract.

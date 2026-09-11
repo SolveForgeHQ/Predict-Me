@@ -1,15 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Market } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
-import { claimWinnings, ContractError } from "@/lib/contract";
-import { Loader2, AlertCircle, CheckCircle2, Gift } from "lucide-react";
+import { fetchPosition, claimWinnings, ContractError } from "@/lib/contract";
+import { Loader2, AlertCircle, CheckCircle2, Gift, RefreshCw } from "lucide-react";
 
 interface Props {
   market: Market;
-  initialYesShares?: number;
-  initialNoShares?: number;
 }
 
 type PendingStep = "simulating" | "signing" | "confirming";
@@ -20,14 +18,11 @@ const STEP_LABEL: Record<PendingStep, string> = {
   confirming: "Confirming on ledger…",
 };
 
-export default function PositionCard({
-  market,
-  initialYesShares = 0,
-  initialNoShares = 0,
-}: Props) {
+export default function PositionCard({ market }: Props) {
   const { publicKey, connected } = useWallet();
-  const [yesShares, setYesShares] = useState(initialYesShares);
-  const [noShares, setNoShares] = useState(initialNoShares);
+  const [yesShares, setYesShares] = useState<number>(0);
+  const [noShares, setNoShares] = useState<number>(0);
+  const [isLoadingPosition, setIsLoadingPosition] = useState(false);
 
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -46,6 +41,33 @@ export default function PositionCard({
     winningSide === "YES" ? yesShares : winningSide === "NO" ? noShares : 0;
   const hasWinningPosition = isResolved && winningShares > 0;
 
+  // ── Load live position from contract ───────────────────────
+  const loadPosition = useCallback(async () => {
+    if (!connected || !publicKey) {
+      setYesShares(0);
+      setNoShares(0);
+      return;
+    }
+
+    setIsLoadingPosition(true);
+    try {
+      const pos = await fetchPosition(publicKey, market.id);
+      if (pos) {
+        setYesShares(pos.yesShares);
+        setNoShares(pos.noShares);
+      }
+    } catch (err) {
+      console.warn("Failed to load position:", err);
+    } finally {
+      setIsLoadingPosition(false);
+    }
+  }, [connected, publicKey, market.id]);
+
+  useEffect(() => {
+    loadPosition();
+  }, [loadPosition]);
+
+  // ── Claim winnings ─────────────────────────────────────────
   const handleClaim = async () => {
     if (!connected || !publicKey || !hasWinningPosition || isPending) return;
 
@@ -68,9 +90,8 @@ export default function PositionCard({
 
       setTxHash(hash);
 
-      // Zero out winning shares upon successful claim
-      if (winningSide === "YES") setYesShares(0);
-      else setNoShares(0);
+      // Refresh on-chain balance after claim
+      await loadPosition();
     } catch (err) {
       if (err instanceof ContractError) {
         switch (err.code) {
@@ -108,9 +129,25 @@ export default function PositionCard({
       }}
     >
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-bold" style={{ color: "#F2F4F7" }}>
-          Your Position
-        </h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-bold" style={{ color: "#F2F4F7" }}>
+            Your Position
+          </h2>
+          {connected && (
+            <button
+              onClick={loadPosition}
+              disabled={isLoadingPosition}
+              title="Refresh on-chain position"
+              className="text-[#8B93A7] hover:text-[#F2F4F7] transition-colors p-1"
+            >
+              <RefreshCw
+                size={13}
+                className={isLoadingPosition ? "animate-spin text-[#00D084]" : ""}
+              />
+            </button>
+          )}
+        </div>
+
         {isResolved && (
           <span
             className="text-[11px] font-bold px-2 py-0.5 rounded"
@@ -147,7 +184,7 @@ export default function PositionCard({
             )}
           </div>
           <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>
-            {connected ? yesShares : 0}
+            {connected ? (isLoadingPosition ? "…" : yesShares) : 0}
           </p>
         </div>
 
@@ -172,7 +209,7 @@ export default function PositionCard({
             )}
           </div>
           <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>
-            {connected ? noShares : 0}
+            {connected ? (isLoadingPosition ? "…" : noShares) : 0}
           </p>
         </div>
       </div>
@@ -249,7 +286,7 @@ export default function PositionCard({
 
       {!connected && (
         <p className="text-xs text-center mt-4" style={{ color: "#8B93A7" }}>
-          Connect your wallet to see your positions and claim rewards.
+          Connect your wallet to see your live on-chain positions.
         </p>
       )}
 
@@ -261,7 +298,7 @@ export default function PositionCard({
 
       {connected && !isResolved && (
         <p className="text-xs text-center mt-4" style={{ color: "#8B93A7" }}>
-          Market is currently active. Winnings can be claimed after resolution.
+          Live on-chain balance. Winnings can be claimed after resolution.
         </p>
       )}
     </div>
