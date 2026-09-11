@@ -247,12 +247,36 @@ export async function buyShares(
   return invokeContract(callerPublicKey, "buy_shares", args);
 }
 
+/**
+ * Calls resolve_market(market_id, outcome) on the contract. Admin only.
+ *
+ * Contract signature (contracts/src/lib.rs):
+ *   resolve_market(env, market_id: u32, outcome: u32)
+ *
+ * @param callerPublicKey — admin wallet public key
+ * @param marketId        — market ID (converted to u32)
+ * @param outcome         — "YES" (0) or "NO" (1)
+ * @returns transaction hash
+ * @throws ContractError
+ */
 export async function resolveMarket(
-  marketId: string,
+  callerPublicKey: string,
+  marketId: string | number,
   outcome: "YES" | "NO"
-): Promise<string | null> {
-  console.warn("contract.ts: resolveMarket() not yet implemented", { marketId, outcome });
-  return null;
+): Promise<string> {
+  if (!callerPublicKey) {
+    throw new ContractError("WALLET_REQUIRED", "Wallet must be connected to resolve a market.");
+  }
+
+  const marketIdNum = typeof marketId === "number" ? marketId : parseInt(marketId, 10) || 1;
+  const outcomeNum = outcome === "YES" ? 0 : 1;
+
+  const args: xdr.ScVal[] = [
+    nativeToScVal(marketIdNum, { type: "u32" }),
+    nativeToScVal(outcomeNum,  { type: "u32" }),
+  ];
+
+  return invokeContract(callerPublicKey, "resolve_market", args);
 }
 
 export async function claimWinnings(marketId: string): Promise<string | null> {

@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
-import { createMarket, ContractError } from "@/lib/contract";
-import { Wallet, ShieldOff, Loader2 } from "lucide-react";
+import { createMarket, resolveMarket, ContractError } from "@/lib/contract";
+import { Wallet, ShieldOff, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 
 // Hardcoded owner address — set NEXT_PUBLIC_ADMIN_ADDRESS in .env.local to override
 const ADMIN_ADDRESS =
@@ -14,16 +14,22 @@ const ADMIN_ADDRESS =
 // Describes which step of the on-chain flow we're in
 type PendingStep =
   | "simulating"   // RPC simulation
-  | "signing"      // Freighter prompt
+  | "signing"      // Freighter/wallet prompt
   | "submitting"   // broadcast to network
   | "confirming";  // polling for ledger inclusion
 
 const STEP_LABEL: Record<PendingStep, string> = {
   simulating:  "Simulating transaction…",
-  signing:     "Waiting for Freighter signature…",
+  signing:     "Waiting for wallet signature…",
   submitting:  "Broadcasting to network…",
   confirming:  "Confirming on ledger…",
 };
+
+interface ResolvingState {
+  marketId: string;
+  outcome: "YES" | "NO";
+  step: PendingStep;
+}
 
 export default function AdminPage() {
   const { publicKey, connected, connecting, connect } = useWallet();
@@ -34,18 +40,24 @@ export default function AdminPage() {
   const [endDate, setEndDate]   = useState("");
   const [category, setCategory] = useState("General");
 
-  // Feedback
+  // Feedback for Create Market
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
   const [errorMsg, setErrorMsg]       = useState("");
   const [txHash, setTxHash]           = useState("");
 
+  // Feedback for Resolve Market
+  const [resolvingState, setResolvingState] = useState<ResolvingState | null>(null);
+  const [resolveError, setResolveError]     = useState<{ marketId: string; message: string } | null>(null);
+  const [resolveSuccess, setResolveSuccess] = useState<{ marketId: string; txHash: string; outcome: "YES" | "NO" } | null>(null);
+
   const isPending = pendingStep !== null;
+  const isResolving = resolvingState !== null;
   const isAdmin   = connected && publicKey === ADMIN_ADDRESS;
 
   // ── Create market ──────────────────────────────────────────
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin || !question.trim() || !endDate || isPending) return;
+    if (!isAdmin || !question.trim() || !endDate || isPending || isResolving) return;
 
     setErrorMsg("");
     setTxHash("");
@@ -54,10 +66,7 @@ export default function AdminPage() {
       // The contract wants Unix seconds, not milliseconds
       const endTimestampSec = Math.floor(new Date(endDate).getTime() / 1000);
 
-      // Walk through the steps so the UI can show progress.
-      // invokeContract() internally does: simulate → sign → submit → poll.
       setPendingStep("simulating");
-
       await new Promise((r) => setTimeout(r, 0));
 
       const callPromise = createMarket(
@@ -99,7 +108,7 @@ export default function AdminPage() {
             setErrorMsg("Contract not configured. Set NEXT_PUBLIC_MARKET_CONTRACT_ID and NEXT_PUBLIC_SOROBAN_RPC_URL in .env.local.");
             break;
           case "SIGN_REJECTED":
-            setErrorMsg("Transaction was rejected in Freighter. No changes were made.");
+            setErrorMsg("Transaction was rejected in your wallet. No changes were made.");
             break;
           case "SIMULATION_FAILED":
             setErrorMsg(`Simulation failed: ${err.message}`);
@@ -119,11 +128,62 @@ export default function AdminPage() {
     }
   };
 
-  const resolve = (id: string, outcome: "resolved_yes" | "resolved_no") => {
-    if (!isAdmin) return;
-    setMarkets((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, status: outcome } : m))
-    );
+  // ── Resolve market ─────────────────────────────────────────
+  const handleResolve = async (marketId: string, outcome: "YES" | "NO") => {
+    if (!isAdmin || isResolving || isPending) return;
+
+    setResolveError(null);
+    setResolveSuccess(null);
+    setResolvingState({ marketId, outcome, step: "simulating" });
+
+    try {
+      await new Promise((r) => setTimeout(r, 0));
+
+      const callPromise = resolveMarket(publicKey!, marketId, outcome);
+
+      const signingTimer = setTimeout(() => {
+        setResolvingState((prev) => prev ? { ...prev, step: "signing" } : null);
+      }, 300);
+
+      const confirmingTimer = setTimeout(() => {
+        setResolvingState((prev) => prev ? { ...prev, step: "confirming" } : null);
+      }, 2000);
+
+      const hash = await callPromise;
+
+      clearTimeout(signingTimer);
+      clearTimeout(confirmingTimer);
+
+      setResolveSuccess({ marketId, txHash: hash, outcome });
+
+      // Update market status in UI once confirmed on-chain
+      const newStatus = outcome === "YES" ? "resolved_yes" : "resolved_no";
+      setMarkets((prev) =>
+        prev.map((m) => (m.id === marketId ? { ...m, status: newStatus } : m))
+      );
+    } catch (err) {
+      let message = "Failed to resolve market.";
+      if (err instanceof ContractError) {
+        switch (err.code) {
+          case "SIGN_REJECTED":
+            message = "Resolution was rejected in your wallet.";
+            break;
+          case "SIMULATION_FAILED":
+            message = `Simulation error: ${err.message}`;
+            break;
+          case "SUBMIT_FAILED":
+            message = `On-chain execution error: ${err.message}`;
+            break;
+          default:
+            message = err.message;
+        }
+      } else if (err instanceof Error) {
+        message = err.message;
+      }
+      setResolveError({ marketId, message });
+    } finally {
+      setResolvingState(null);
+    }
   };
 
   const openCount     = markets.filter((m) => m.status === "open").length;
@@ -252,7 +312,7 @@ export default function AdminPage() {
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 required
-                disabled={isPending}
+                disabled={isPending || isResolving}
                 className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50"
                 style={{
                   backgroundColor: "#0B0E14",
@@ -276,7 +336,7 @@ export default function AdminPage() {
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                disabled={isPending}
+                disabled={isPending || isResolving}
                 className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50"
                 style={{
                   backgroundColor: "#0B0E14",
@@ -304,7 +364,7 @@ export default function AdminPage() {
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 required
-                disabled={isPending}
+                disabled={isPending || isResolving}
                 className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50"
                 style={{
                   backgroundColor: "#0B0E14",
@@ -332,11 +392,14 @@ export default function AdminPage() {
             {/* Error */}
             {errorMsg && !isPending && (
               <div
-                className="rounded-lg px-4 py-3 text-sm"
+                className="rounded-lg px-4 py-3 text-sm flex items-start gap-2.5"
                 style={{ backgroundColor: "#1A0F14", border: "1px solid #FF4D5E44", color: "#FF4D5E" }}
               >
-                <p className="font-bold mb-0.5">Transaction failed</p>
-                <p className="opacity-80">{errorMsg}</p>
+                <AlertCircle size={15} className="shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold mb-0.5">Transaction failed</p>
+                  <p className="opacity-90 text-xs">{errorMsg}</p>
+                </div>
               </div>
             )}
 
@@ -360,7 +423,7 @@ export default function AdminPage() {
 
             <button
               type="submit"
-              disabled={isPending}
+              disabled={isPending || isResolving}
               className="btn-yes self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isPending ? (
@@ -389,80 +452,142 @@ export default function AdminPage() {
           </span>
         </div>
 
-        <div className="flex flex-col gap-2">
-          {markets.map((market) => (
-            <div
-              key={market.id}
-              className="rounded-xl px-4 py-3.5"
-              style={{
-                background: "#111620",
-                border: "1px solid #1E2435",
-                transition: "border-color 0.15s ease",
-              }}
-              onMouseEnter={(e) =>
-                ((e.currentTarget as HTMLDivElement).style.borderColor = "#2A3347")
-              }
-              onMouseLeave={(e) =>
-                ((e.currentTarget as HTMLDivElement).style.borderColor = "#1E2435")
-              }
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span
-                      className="inline-block text-xs font-bold px-2 py-0.5 rounded"
-                      style={
-                        market.status === "open"
-                          ? { backgroundColor: "#00D08418", color: "#00D084" }
+        <div className="flex flex-col gap-3">
+          {markets.map((market) => {
+            const isThisResolving = resolvingState?.marketId === market.id;
+            const hasError = resolveError?.marketId === market.id;
+            const hasSuccess = resolveSuccess?.marketId === market.id;
+
+            return (
+              <div
+                key={market.id}
+                className="rounded-xl px-4 py-3.5"
+                style={{
+                  background: "#111620",
+                  border: "1px solid #1E2435",
+                  transition: "border-color 0.15s ease",
+                }}
+                onMouseEnter={(e) =>
+                  ((e.currentTarget as HTMLDivElement).style.borderColor = "#2A3347")
+                }
+                onMouseLeave={(e) =>
+                  ((e.currentTarget as HTMLDivElement).style.borderColor = "#1E2435")
+                }
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span
+                        className="inline-block text-xs font-bold px-2 py-0.5 rounded"
+                        style={
+                          market.status === "open"
+                            ? { backgroundColor: "#00D08418", color: "#00D084" }
+                            : market.status === "resolved_yes"
+                            ? { backgroundColor: "#00D08418", color: "#00D084" }
+                            : { backgroundColor: "#FF4D5E18", color: "#FF4D5E" }
+                        }
+                      >
+                        {market.status === "open"
+                          ? "OPEN"
                           : market.status === "resolved_yes"
-                          ? { backgroundColor: "#00D08418", color: "#00D084" }
-                          : { backgroundColor: "#FF4D5E18", color: "#FF4D5E" }
-                      }
-                    >
-                      {market.status === "open"
-                        ? "OPEN"
-                        : market.status === "resolved_yes"
-                        ? "YES"
-                        : "NO"}
-                    </span>
-                    <span className="text-xs" style={{ color: "#8B93A7" }}>
-                      {formatPool(market.totalPool)} · {timeRemaining(market.endsAt)}
-                    </span>
+                          ? "YES (RESOLVED)"
+                          : "NO (RESOLVED)"}
+                      </span>
+                      <span className="text-xs" style={{ color: "#8B93A7" }}>
+                        {formatPool(market.totalPool)} · {timeRemaining(market.endsAt)}
+                      </span>
+                    </div>
+                    <p className="text-sm font-semibold truncate" style={{ color: "#F2F4F7" }}>
+                      {market.question}
+                    </p>
                   </div>
-                  <p className="text-sm font-semibold truncate" style={{ color: "#F2F4F7" }}>
-                    {market.question}
-                  </p>
+
+                  {market.status === "open" && (
+                    <div className="flex gap-2 shrink-0 items-center">
+                      <button
+                        onClick={() => handleResolve(market.id, "YES")}
+                        disabled={isResolving || isPending}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        style={{
+                          backgroundColor: "#00D08422",
+                          color: "#00D084",
+                          border: "1px solid #00D08433",
+                        }}
+                      >
+                        {isThisResolving && resolvingState?.outcome === "YES" ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" />
+                            {resolvingState.step === "signing"
+                              ? "Sign…"
+                              : resolvingState.step === "confirming"
+                              ? "Confirming…"
+                              : "Simulating…"}
+                          </>
+                        ) : (
+                          "Resolve YES"
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleResolve(market.id, "NO")}
+                        disabled={isResolving || isPending}
+                        className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                        style={{
+                          backgroundColor: "#FF4D5E22",
+                          color: "#FF4D5E",
+                          border: "1px solid #FF4D5E33",
+                        }}
+                      >
+                        {isThisResolving && resolvingState?.outcome === "NO" ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" />
+                            {resolvingState.step === "signing"
+                              ? "Sign…"
+                              : resolvingState.step === "confirming"
+                              ? "Confirming…"
+                              : "Simulating…"}
+                          </>
+                        ) : (
+                          "Resolve NO"
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {market.status === "open" && (
-                  <div className="flex gap-2 shrink-0">
-                    <button
-                      onClick={() => resolve(market.id, "resolved_yes")}
-                      className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-                      style={{
-                        backgroundColor: "#00D08422",
-                        color: "#00D084",
-                        border: "1px solid #00D08433",
-                      }}
+                {/* Resolution error */}
+                {hasError && (
+                  <div
+                    className="mt-3 rounded-lg px-3 py-2 text-xs flex items-center gap-2"
+                    style={{ backgroundColor: "#1A0F14", border: "1px solid #FF4D5E44", color: "#FF4D5E" }}
+                  >
+                    <AlertCircle size={13} className="shrink-0" />
+                    <span>{resolveError.message}</span>
+                  </div>
+                )}
+
+                {/* Resolution success */}
+                {hasSuccess && (
+                  <div
+                    className="mt-3 rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2"
+                    style={{ backgroundColor: "#00D08418", border: "1px solid #00D08433", color: "#00D084" }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 size={13} className="shrink-0" />
+                      <span>Market resolved {resolveSuccess.outcome} on-chain!</span>
+                    </div>
+                    <a
+                      href={`https://stellar.expert/explorer/testnet/tx/${resolveSuccess.txHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline font-mono text-[11px] opacity-80 hover:opacity-100"
                     >
-                      Resolve YES
-                    </button>
-                    <button
-                      onClick={() => resolve(market.id, "resolved_no")}
-                      className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
-                      style={{
-                        backgroundColor: "#FF4D5E22",
-                        color: "#FF4D5E",
-                        border: "1px solid #FF4D5E33",
-                      }}
-                    >
-                      Resolve NO
-                    </button>
+                      View Tx ↗
+                    </a>
                   </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
