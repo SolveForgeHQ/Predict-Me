@@ -14,16 +14,10 @@ interface Props {
 
 type PendingStep = "simulating" | "signing" | "confirming";
 
-const STEP_LABEL: Record<PendingStep, string> = {
-  simulating: "Simulating transaction…",
-  signing: "Waiting for wallet signature…",
-  confirming: "Confirming on ledger…",
-};
-
 export default function TradePanel({ market }: Props) {
   const { publicKey, connected, connecting, connect } = useWallet();
   const toast = useToast();
-  const { client, chainMetadata } = useChain();
+  const { chain, client, chainMetadata } = useChain();
   const [tab, setTab] = useState<"YES" | "NO">("YES");
   const [yesAmount, setYesAmount] = useState("");
   const [noAmount, setNoAmount] = useState("");
@@ -36,6 +30,19 @@ export default function TradePanel({ market }: Props) {
   const isYes = tab === "YES";
   const currentAmount = isYes ? yesAmount : noAmount;
   const currency = chainMetadata.currency;
+
+  const getStepLabel = (step: PendingStep): string => {
+    switch (step) {
+      case "simulating":
+        return `Simulating trade on ${chainMetadata.name}…`;
+      case "signing":
+        return "Waiting for wallet signature…";
+      case "confirming":
+        return chain === "avalanche"
+          ? "Waiting for block confirmation on Avalanche…"
+          : "Confirming on Stellar ledger…";
+    }
+  };
 
   const yesPrice = market.yesPercent / 100;
   const noPrice = market.noPercent / 100;
@@ -84,11 +91,41 @@ export default function TradePanel({ market }: Props) {
       clearTimeout(confirmingTimer);
 
       setTxHash(result.txHash);
-      toast.success("Trade Confirmed!", `Successfully purchased ${tab} shares on-chain.`);
+      toast.success(
+        "Trade Confirmed!",
+        `Successfully purchased ${tab} shares on ${chainMetadata.name}.`
+      );
       if (isYes) setYesAmount("");
       else setNoAmount("");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to execute trade.";
+      let message = "Failed to execute trade.";
+      if (err instanceof Error) {
+        const raw = err.message;
+        if (
+          raw.includes("User rejected") ||
+          raw.includes("User denied") ||
+          raw.includes("rejected in your wallet") ||
+          raw.includes("rejected in wallet")
+        ) {
+          message = "Transaction was cancelled in your wallet.";
+        } else if (raw.includes("insufficient funds") || raw.includes("exceeds balance")) {
+          message = `Insufficient ${currency} balance to complete this purchase (including gas fees).`;
+        } else if (raw.includes("MarketNotFound")) {
+          message = "Market does not exist on the smart contract.";
+        } else if (raw.includes("MarketNotOpen")) {
+          message = "This market is closed or has already been resolved.";
+        } else if (raw.includes("MarketExpired")) {
+          message = "This market has expired and is no longer accepting trades.";
+        } else if (raw.includes("ZeroDeposit")) {
+          message = `Amount must be greater than 0 ${currency}.`;
+        } else if (raw.includes("not configured")) {
+          message = raw;
+        } else if (raw.includes("WalletClient is required")) {
+          message = `Please connect your ${chainMetadata.shortName} wallet to trade.`;
+        } else {
+          message = raw;
+        }
+      }
       setErrorMsg(message);
       toast.error("Trade Failed", message);
       console.error("[TradePanel] buyShares error:", err);
@@ -211,7 +248,7 @@ export default function TradePanel({ market }: Props) {
 
         {/* Pending step indicator */}
         {isPending && (
-          <StatusBanner variant="pending" stepLabel={STEP_LABEL[pendingStep!]} />
+          <StatusBanner variant="pending" stepLabel={getStepLabel(pendingStep!)} />
         )}
 
         {/* Inline error display */}
@@ -246,7 +283,7 @@ export default function TradePanel({ market }: Props) {
             {isPending ? (
               <>
                 <Loader2 size={15} className="animate-spin" />
-                Processing…
+                Processing trade on {chainMetadata.shortName}…
               </>
             ) : (
               `Buy ${tab}`
@@ -263,8 +300,8 @@ export default function TradePanel({ market }: Props) {
               color: "#8B93A7",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLButtonElement).style.borderColor = "#00D08455";
-              (e.currentTarget as HTMLButtonElement).style.color = "#00D084";
+              (e.currentTarget as HTMLButtonElement).style.borderColor = chainMetadata.borderColor;
+              (e.currentTarget as HTMLButtonElement).style.color = chainMetadata.color;
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLButtonElement).style.borderColor = "#1E2435";
@@ -272,7 +309,7 @@ export default function TradePanel({ market }: Props) {
             }}
           >
             <Wallet size={15} strokeWidth={1.8} />
-            {connecting ? "Connecting wallet…" : "Connect wallet to trade"}
+            {connecting ? "Connecting wallet…" : `Connect ${chainMetadata.shortName} wallet to trade`}
           </button>
         )}
       </div>

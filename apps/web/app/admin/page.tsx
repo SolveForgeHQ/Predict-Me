@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
@@ -8,23 +8,18 @@ import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { Wallet, ShieldOff, Loader2 } from "lucide-react";
 
-// Hardcoded owner address — set NEXT_PUBLIC_ADMIN_ADDRESS in .env.local to override
-const ADMIN_ADDRESS =
-  process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
-  "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
-
 // Describes which step of the on-chain flow we're in
 type PendingStep =
   | "simulating"   // RPC simulation
-  | "signing"      // Freighter/wallet prompt
+  | "signing"      // Wallet prompt
   | "submitting"   // broadcast to network
-  | "confirming";  // polling for ledger inclusion
+  | "confirming";  // polling for ledger/block inclusion
 
 const STEP_LABEL: Record<PendingStep, string> = {
   simulating:  "Simulating transaction…",
   signing:     "Waiting for wallet signature…",
   submitting:  "Broadcasting to network…",
-  confirming:  "Confirming on ledger…",
+  confirming:  "Waiting for block confirmation…",
 };
 
 interface ResolvingState {
@@ -36,7 +31,7 @@ interface ResolvingState {
 export default function AdminPage() {
   const { publicKey, connected, connecting, connect } = useWallet();
   const toast = useToast();
-  const { client } = useChain();
+  const { chain, chainMetadata, client } = useChain();
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
 
   // Form fields
@@ -54,9 +49,65 @@ export default function AdminPage() {
   const [resolveError, setResolveError]     = useState<{ marketId: string; message: string } | null>(null);
   const [resolveSuccess, setResolveSuccess] = useState<{ marketId: string; txHash: string; outcome: "YES" | "NO" } | null>(null);
 
+  // On-chain owner state for Avalanche
+  const [onChainOwner, setOnChainOwner] = useState<string | null>(null);
+  const [isLoadingOwner, setIsLoadingOwner] = useState(false);
+
+  const isAvalanche = chain === "avalanche";
+
+  // Query contract owner when on Avalanche
+  useEffect(() => {
+    let cancelled = false;
+    if (isAvalanche && client.getOwner) {
+      setIsLoadingOwner(true);
+      client.getOwner()
+        .then((owner) => {
+          if (!cancelled) setOnChainOwner(owner);
+        })
+        .catch((err) => {
+          console.warn("Failed to get contract owner:", err);
+          if (!cancelled) setOnChainOwner(null);
+        })
+        .finally(() => {
+          if (!cancelled) setIsLoadingOwner(false);
+        });
+    } else {
+      setOnChainOwner(null);
+      setIsLoadingOwner(false);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isAvalanche, client]);
+
+  // Environment fallback addresses
+  const configuredAvalancheAdmin =
+    process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ??
+    process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
+  const configuredStellarAdmin =
+    process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ??
+    process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
+    "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
+
+  const expectedOwner = isAvalanche
+    ? (onChainOwner ?? configuredAvalancheAdmin ?? null)
+    : configuredStellarAdmin;
+
+  const isAdmin = Boolean(
+    connected &&
+    publicKey &&
+    (
+      isAvalanche
+        ? (
+            (onChainOwner && publicKey.toLowerCase() === onChainOwner.toLowerCase()) ||
+            (configuredAvalancheAdmin && publicKey.toLowerCase() === configuredAvalancheAdmin.toLowerCase())
+          )
+        : (publicKey === configuredStellarAdmin)
+    )
+  );
+
   const isPending = pendingStep !== null;
   const isResolving = resolvingState !== null;
-  const isAdmin   = connected && publicKey === ADMIN_ADDRESS;
 
   // ── Create market ──────────────────────────────────────────
   const handleCreate = async (e: React.FormEvent) => {
@@ -66,11 +117,21 @@ export default function AdminPage() {
     setErrorMsg("");
     setTxHash("");
 
-    try {
-      const endTimestampSec = Math.floor(new Date(endDate).getTime() / 1000);
+    const endTimestampSec = Math.floor(new Date(endDate).getTime() / 1000);
+    const nowSec = Math.floor(Date.now() / 1000);
 
+    if (endTimestampSec <= nowSec) {
+      setErrorMsg("Resolution date must be in the future.");
+      return;
+    }
+
+    try {
       setPendingStep("simulating");
       await new Promise((r) => setTimeout(r, 0));
+
+      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
+      const submittingTimer = setTimeout(() => setPendingStep("submitting"), 1200);
+      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2500);
 
       const callPromise = client.createMarket({
         question: question.trim(),
@@ -79,23 +140,25 @@ export default function AdminPage() {
         callerAddress: publicKey ?? undefined,
       });
 
-      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
-      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
-
       const result = await callPromise;
 
       clearTimeout(signingTimer);
+      clearTimeout(submittingTimer);
       clearTimeout(confirmingTimer);
 
       setTxHash(result.txHash);
-      toast.success("Market Created!", "Market has been registered on-chain.");
+      toast.success(
+        "Market Created!",
+        `Market registered on-chain on ${chainMetadata.name}.`
+      );
       setQuestion("");
       setEndDate("");
       setCategory("General");
 
       // Optimistically add to the local list so the admin sees it immediately
+      const createdId = result.data ?? result.txHash;
       const newMarket: Market = {
-        id: result.txHash,
+        id: createdId,
         question: question.trim(),
         yesPercent: 50,
         noPercent: 50,
@@ -106,7 +169,27 @@ export default function AdminPage() {
       };
       setMarkets((prev) => [newMarket, ...prev]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to create market.";
+      let message = "Failed to create market.";
+      if (err instanceof Error) {
+        if (
+          err.message.includes("User rejected") ||
+          err.message.includes("User denied") ||
+          err.message.includes("rejected in your wallet")
+        ) {
+          message = "Transaction was cancelled in your wallet.";
+        } else if (
+          err.message.includes("OwnableUnauthorizedAccount") ||
+          err.message.includes("caller is not the owner")
+        ) {
+          message = "Access restricted: Only the contract owner can create markets on Avalanche.";
+        } else if (err.message.includes("InvalidEndTime")) {
+          message = "Resolution date must be in the future.";
+        } else if (err.message.includes("EmptyQuestion")) {
+          message = "Market question cannot be empty.";
+        } else {
+          message = err.message;
+        }
+      }
       setErrorMsg(message);
       toast.error("Market Creation Failed", message);
       console.error("[admin] createMarket error:", err);
@@ -180,17 +263,30 @@ export default function AdminPage() {
             Wallet required
           </h2>
           <p className="text-sm" style={{ color: "#8B93A7" }}>
-            Connect your admin wallet to access market management.
+            Connect your admin wallet to access market management on {chainMetadata.name}.
           </p>
         </div>
         <button
           onClick={connect}
           disabled={connecting}
-          className="btn-yes px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2"
+          className="px-6 py-3 rounded-xl text-sm font-bold flex items-center gap-2 transition-opacity hover:opacity-90"
+          style={{ backgroundColor: chainMetadata.color, color: "#FFFFFF" }}
         >
           <Wallet size={15} strokeWidth={2} />
           {connecting ? "Connecting…" : "Connect Wallet"}
         </button>
+      </div>
+    );
+  }
+
+  // ── Checking owner loading state ─────────────────────────
+  if (isLoadingOwner) {
+    return (
+      <div className="max-w-md mx-auto px-4 py-20 flex flex-col items-center text-center gap-3">
+        <Loader2 size={24} className="animate-spin" style={{ color: chainMetadata.color }} />
+        <p className="text-sm" style={{ color: "#8B93A7" }}>
+          Verifying contract owner permissions on {chainMetadata.name}…
+        </p>
       </div>
     );
   }
@@ -207,15 +303,39 @@ export default function AdminPage() {
         </div>
         <div>
           <h2 className="text-xl font-extrabold mb-2" style={{ color: "#F2F4F7" }}>
-            Access denied
+            Access restricted to owner
           </h2>
-          <p className="text-sm" style={{ color: "#8B93A7" }}>
-            The connected wallet is not the admin address for this deployment.
+          <p className="text-sm leading-relaxed" style={{ color: "#8B93A7" }}>
+            Only the contract owner can manage prediction markets on{" "}
+            <span className="font-semibold" style={{ color: chainMetadata.color }}>
+              {chainMetadata.name}
+            </span>.
           </p>
         </div>
-        <p className="text-xs font-mono px-3 py-2 rounded-lg" style={{ backgroundColor: "#161B26", color: "#8B93A7" }}>
-          {publicKey?.slice(0, 8)}…{publicKey?.slice(-6)}
-        </p>
+
+        <div
+          className="w-full text-left p-3.5 rounded-xl flex flex-col gap-2 text-xs"
+          style={{ backgroundColor: "#161B26", border: "1px solid #1E2435" }}
+        >
+          <div>
+            <p className="text-[#8B93A7] mb-0.5 font-medium">Connected wallet:</p>
+            <p className="font-mono text-[#F2F4F7] break-all">{publicKey}</p>
+          </div>
+          {expectedOwner && (
+            <div className="pt-2 border-t border-[#1E2435]">
+              <p className="text-[#8B93A7] mb-0.5 font-medium">Required contract owner:</p>
+              <p className="font-mono text-[#F59E0B] break-all">{expectedOwner}</p>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={connect}
+          className="px-5 py-2.5 rounded-xl text-sm font-semibold transition-opacity hover:opacity-90"
+          style={{ backgroundColor: chainMetadata.color, color: "#FFFFFF" }}
+        >
+          Connect Owner Wallet
+        </button>
       </div>
     );
   }
@@ -241,6 +361,13 @@ export default function AdminPage() {
               >
                 ADMIN
               </span>
+              <span
+                className="text-xs font-semibold px-2 py-0.5 rounded flex items-center gap-1.5"
+                style={{ backgroundColor: chainMetadata.badgeBg, color: chainMetadata.color }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: chainMetadata.color }} />
+                {chainMetadata.name}
+              </span>
             </div>
             <h1 className="text-2xl font-extrabold tracking-tight" style={{ color: "#F2F4F7" }}>
               Market Management
@@ -251,7 +378,7 @@ export default function AdminPage() {
           </div>
           <div className="hidden sm:flex gap-4 text-center">
             <div>
-              <p className="text-xl font-extrabold" style={{ color: "#00D084" }}>{openCount}</p>
+              <p className="text-xl font-extrabold" style={{ color: chainMetadata.color }}>{openCount}</p>
               <p className="text-xs" style={{ color: "#8B93A7" }}>Open</p>
             </div>
             <div style={{ borderLeft: "1px solid #1E2435", paddingLeft: "1rem" }}>
@@ -267,9 +394,9 @@ export default function AdminPage() {
           style={{ background: "linear-gradient(135deg, #131820, #0F1520)", border: "1px solid #1E2435" }}
         >
           <div className="flex items-center gap-2 mb-5">
-            <div className="w-1 h-5 rounded-full" style={{ backgroundColor: "#00D084" }} />
+            <div className="w-1 h-5 rounded-full" style={{ backgroundColor: chainMetadata.color }} />
             <h2 className="text-sm font-bold uppercase tracking-wider" style={{ color: "#F2F4F7" }}>
-              Create New Market
+              Create New Market on {chainMetadata.shortName}
             </h2>
           </div>
 
@@ -296,7 +423,7 @@ export default function AdminPage() {
                   color: "#F2F4F7",
                   transition: "border-color 0.15s ease",
                 }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = "#00D08466")}
+                onFocus={(e) => (e.currentTarget.style.borderColor = chainMetadata.borderColor)}
                 onBlur={(e)  => (e.currentTarget.style.borderColor = "#1E2435")}
               />
             </div>
@@ -349,7 +476,7 @@ export default function AdminPage() {
                   colorScheme: "dark",
                   transition: "border-color 0.15s ease",
                 }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = "#00D08466")}
+                onFocus={(e) => (e.currentTarget.style.borderColor = chainMetadata.borderColor)}
                 onBlur={(e)  => (e.currentTarget.style.borderColor = "#1E2435")}
               />
             </div>
@@ -376,15 +503,19 @@ export default function AdminPage() {
             <button
               type="submit"
               disabled={isPending || isResolving}
-              className="btn-yes self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-lg"
+              style={{
+                backgroundColor: chainMetadata.color,
+                boxShadow: `0 0 16px ${chainMetadata.color}40`,
+              }}
             >
               {isPending ? (
                 <>
                   <Loader2 size={14} className="animate-spin" />
-                  Creating…
+                  Creating on {chainMetadata.shortName}…
                 </>
               ) : (
-                "+ Create Market"
+                `+ Create Market on ${chainMetadata.shortName}`
               )}
             </button>
           </form>

@@ -4,6 +4,7 @@ import {
   type Address,
   parseEther,
   formatEther,
+  parseEventLogs,
 } from "viem";
 import type {
   Market,
@@ -38,17 +39,40 @@ export class AvalancheMarketClient implements PredictionMarketClient {
     this.defaultAccount = config.defaultAccount;
   }
 
+  private assertConfigured(): void {
+    if (
+      !this.contractAddress ||
+      this.contractAddress === "0x0000000000000000000000000000000000000000"
+    ) {
+      throw new Error(
+        "Avalanche contract address is not configured. Please set NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS in .env.local."
+      );
+    }
+  }
+
+  private parseMarketId(marketId: string): bigint {
+    try {
+      return BigInt(marketId);
+    } catch {
+      throw new Error(
+        `Invalid market ID "${marketId}". A numeric market ID is required on Avalanche.`
+      );
+    }
+  }
+
   private getAccount(callerAddress?: string): Address {
     const account = (callerAddress as Address) ?? this.defaultAccount ?? this.walletClient?.account?.address;
     if (!account) {
-      throw new Error("Caller address / account is required for Avalanche transaction.");
+      throw new Error("Caller address / account is required for Avalanche transaction. Please connect your wallet.");
     }
     return account;
   }
 
   async createMarket(params: CreateMarketParams): Promise<TransactionResult<string>> {
+    this.assertConfigured();
+
     if (!this.walletClient) {
-      throw new Error("WalletClient is required to create a market on Avalanche.");
+      throw new Error("WalletClient is required to create a market on Avalanche. Please connect your wallet.");
     }
 
     const account = this.getAccount(params.callerAddress);
@@ -67,17 +91,34 @@ export class AvalancheMarketClient implements PredictionMarketClient {
       chain: this.walletClient.chain,
     });
 
-    await this.publicClient.waitForTransactionReceipt({ hash: txHash });
-    return { txHash };
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    let marketId: string | undefined = undefined;
+    try {
+      const logs = parseEventLogs({
+        abi: PredictionMarketAbi,
+        logs: receipt.logs,
+        eventName: "MarketCreated",
+      });
+      if (logs.length > 0 && (logs[0] as any).args?.marketId !== undefined) {
+        marketId = (logs[0] as any).args.marketId.toString();
+      }
+    } catch {
+      // Non-critical if event log parsing fails
+    }
+
+    return { txHash, data: marketId };
   }
 
   async buyShares(params: BuySharesParams): Promise<TransactionResult<void>> {
+    this.assertConfigured();
+
     if (!this.walletClient) {
-      throw new Error("WalletClient is required to buy shares on Avalanche.");
+      throw new Error("WalletClient is required to buy shares on Avalanche. Please connect your wallet.");
     }
 
     const account = this.getAccount(params.callerAddress);
-    const marketIdBigInt = BigInt(params.marketId);
+    const marketIdBigInt = this.parseMarketId(params.marketId);
     const isYes = params.outcome.toLowerCase() === "yes";
     const valueWei = parseEther(params.amount.toString());
 
@@ -100,12 +141,14 @@ export class AvalancheMarketClient implements PredictionMarketClient {
   }
 
   async resolveMarket(params: ResolveMarketParams): Promise<TransactionResult<void>> {
+    this.assertConfigured();
+
     if (!this.walletClient) {
-      throw new Error("WalletClient is required to resolve a market on Avalanche.");
+      throw new Error("WalletClient is required to resolve a market on Avalanche. Please connect your wallet.");
     }
 
     const account = this.getAccount(params.callerAddress);
-    const marketIdBigInt = BigInt(params.marketId);
+    const marketIdBigInt = this.parseMarketId(params.marketId);
     const outcomeBool = params.outcome.toLowerCase() === "yes";
 
     const txHash = await this.walletClient.writeContract({
@@ -122,12 +165,14 @@ export class AvalancheMarketClient implements PredictionMarketClient {
   }
 
   async claimWinnings(params: ClaimWinningsParams): Promise<TransactionResult<number>> {
+    this.assertConfigured();
+
     if (!this.walletClient) {
-      throw new Error("WalletClient is required to claim winnings on Avalanche.");
+      throw new Error("WalletClient is required to claim winnings on Avalanche. Please connect your wallet.");
     }
 
     const account = this.getAccount(params.callerAddress);
-    const marketIdBigInt = BigInt(params.marketId);
+    const marketIdBigInt = this.parseMarketId(params.marketId);
 
     const txHash = await this.walletClient.writeContract({
       address: this.contractAddress,
@@ -201,6 +246,20 @@ export class AvalancheMarketClient implements PredictionMarketClient {
         avgNoPrice: null,
       };
     } catch {
+      return null;
+    }
+  }
+
+  async getOwner(): Promise<string | null> {
+    try {
+      const owner = await this.publicClient.readContract({
+        address: this.contractAddress,
+        abi: PredictionMarketAbi,
+        functionName: "owner",
+      });
+      return (owner as string) || null;
+    } catch (err) {
+      console.warn("Could not read contract owner on Avalanche:", err);
       return null;
     }
   }

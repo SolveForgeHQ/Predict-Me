@@ -23,7 +23,7 @@ const STEP_LABEL: Record<PendingStep, string> = {
 export default function PositionCard({ market }: Props) {
   const { publicKey, connected, connect } = useWallet();
   const toast = useToast();
-  const { client } = useChain();
+  const { client, chain, chainMetadata } = useChain();
   const [yesShares, setYesShares] = useState<number>(0);
   const [noShares, setNoShares] = useState<number>(0);
   const [isLoadingPosition, setIsLoadingPosition] = useState(false);
@@ -44,6 +44,19 @@ export default function PositionCard({ market }: Props) {
   const winningShares =
     winningSide === "YES" ? yesShares : winningSide === "NO" ? noShares : 0;
   const hasWinningPosition = isResolved && winningShares > 0;
+
+  const getStepLabel = (step: PendingStep): string => {
+    switch (step) {
+      case "simulating":
+        return `Simulating claim on ${chainMetadata.name}…`;
+      case "signing":
+        return "Waiting for wallet signature…";
+      case "confirming":
+        return chain === "avalanche"
+          ? "Waiting for block confirmation on Avalanche…"
+          : "Confirming on Stellar ledger…";
+    }
+  };
 
   // ── Load live position from contract via the active chain client ───
   const loadPosition = useCallback(async () => {
@@ -96,12 +109,34 @@ export default function PositionCard({ market }: Props) {
       clearTimeout(confirmingTimer);
 
       setTxHash(result.txHash);
-      toast.success("Winnings Claimed!", `Claimed ${winningShares} winning ${winningSide} shares.`);
+      toast.success(
+        "Winnings Claimed!",
+        `Claimed ${winningShares} winning ${winningSide} shares on ${chainMetadata.name}.`
+      );
 
       // Refresh on-chain balance after claim
       await loadPosition();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to claim winnings.";
+      let message = "Failed to claim winnings.";
+      if (err instanceof Error) {
+        const raw = err.message;
+        if (
+          raw.includes("User rejected") ||
+          raw.includes("User denied") ||
+          raw.includes("rejected in your wallet") ||
+          raw.includes("rejected in wallet")
+        ) {
+          message = "Transaction was cancelled in your wallet.";
+        } else if (raw.includes("MarketNotResolved")) {
+          message = "This market has not been resolved yet.";
+        } else if (raw.includes("NoWinningShares")) {
+          message = "You have no winning shares to claim in this market.";
+        } else if (raw.includes("TransferFailed")) {
+          message = "Payout transfer failed on-chain.";
+        } else {
+          message = raw;
+        }
+      }
       setErrorMsg(message);
       toast.error("Claim Failed", message);
     } finally {
@@ -226,7 +261,7 @@ export default function PositionCard({ market }: Props) {
             {isPending ? (
               <>
                 <Loader2 size={15} className="animate-spin" />
-                {STEP_LABEL[pendingStep!]}
+                {getStepLabel(pendingStep!)}
               </>
             ) : (
               <>
@@ -241,7 +276,7 @@ export default function PositionCard({ market }: Props) {
       {/* Pending status banner */}
       {isPending && (
         <div className="mt-3">
-          <StatusBanner variant="pending" stepLabel={STEP_LABEL[pendingStep!]} />
+          <StatusBanner variant="pending" stepLabel={getStepLabel(pendingStep!)} />
         </div>
       )}
 

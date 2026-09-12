@@ -55,4 +55,10 @@ export interface PredictionMarketClient {
    * @returns Position object with yesShares and noShares, or null if query fails.
    */
   getPosition(marketId: string, userAddress: string): Promise<Position | null>;
+
+  /**
+   * Fetches the contract owner or admin address, if supported.
+   * @returns Address string or null
+   */
+  getOwner?(): Promise<string | null>;
 }

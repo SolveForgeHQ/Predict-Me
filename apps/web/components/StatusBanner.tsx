@@ -83,12 +83,16 @@ export default function StatusBanner({
           {message && <p className="opacity-90 text-[11px] mt-0.5">{message}</p>}
           {txHash && (
             <a
-              href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+              href={
+                txHash.startsWith("0x")
+                  ? `https://testnet.snowtrace.io/tx/${txHash}`
+                  : `https://stellar.expert/explorer/testnet/tx/${txHash}`
+              }
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 underline opacity-85 hover:opacity-100 font-mono text-[11px] mt-1 break-all"
             >
-              <span>View on Stellar Expert</span>
+              <span>{txHash.startsWith("0x") ? "View on Snowtrace (Fuji)" : "View on Stellar Expert"}</span>
               <ExternalLink size={10} />
             </a>
           )}
