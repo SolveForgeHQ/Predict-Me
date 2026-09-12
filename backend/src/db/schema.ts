@@ -23,6 +23,8 @@ export const quests = sqliteTable('quests', {
 
 export const marketCache = sqliteTable('market_cache', {
   id: text('id').primaryKey(),
+  marketId: text('market_id'),
+  chain: text('chain').notNull().default('stellar'),
   question: text('question').notNull(),
   category: text('category'),
   endTime: integer('end_time').notNull(),

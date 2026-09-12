@@ -2,6 +2,7 @@ export type MarketStatus = "open" | "resolved_yes" | "resolved_no";
 
 export interface Market {
   id: string;
+  chain?: string;
   question: string;
   yesPercent: number;
   noPercent: number;
@@ -102,11 +103,12 @@ export interface MarketLoadResult {
 /**
  * Loads all markets and reports data source (backend, direct chain, or fallback).
  */
-export async function loadMarketsWithSource(): Promise<MarketLoadResult> {
-  // 1. Primary: Backend GET /markets
+export async function loadMarketsWithSource(chain?: string): Promise<MarketLoadResult> {
+  // 1. Primary: Backend GET /markets (chain-aware)
   try {
     const { apiFetch } = await import("@/lib/api");
-    const data = await apiFetch<{ markets?: any[] }>("/markets");
+    const path = chain ? `/markets?chain=${encodeURIComponent(chain)}` : "/markets";
+    const data = await apiFetch<{ markets?: any[] }>(path);
     if (data && Array.isArray(data.markets) && data.markets.length > 0) {
       const mapped = data.markets.map((m) => {
         const yesPool = Number(m.yesPool ?? 0);
@@ -123,6 +125,7 @@ export async function loadMarketsWithSource(): Promise<MarketLoadResult> {
 
         return {
           id: String(m.id),
+          chain: m.chain ? String(m.chain) : undefined,
           question: String(m.question),
           category: String(m.category ?? "General"),
           yesPercent,
@@ -159,8 +162,8 @@ export async function loadMarketsWithSource(): Promise<MarketLoadResult> {
  * 2. Fallback: Directly fetches on-chain from Soroban contract RPC
  * 3. Default: Returns initial baseline markets
  */
-export async function loadAllMarkets(): Promise<Market[]> {
-  const result = await loadMarketsWithSource();
+export async function loadAllMarkets(chain?: string): Promise<Market[]> {
+  const result = await loadMarketsWithSource(chain);
   return result.markets;
 }
 

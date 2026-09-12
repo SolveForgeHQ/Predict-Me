@@ -8,6 +8,8 @@ main = "src/index.ts"
 JWT_SECRET = "dev-secret-change-me-in-production"
 SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org"
 MARKET_CONTRACT_ID = ""
+AVALANCHE_RPC_URL = "https://api.avax-test.network/ext/bc/C/rpc"
+AVALANCHE_CONTRACT_ADDRESS = ""
 
 [observability]
 enabled = true

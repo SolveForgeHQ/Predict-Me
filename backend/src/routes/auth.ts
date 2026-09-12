@@ -84,7 +84,7 @@ auth.post('/login', async (c) => {
   try {
     const keypair = Keypair.fromPublicKey(address);
     const messageBytes = new TextEncoder().encode(message);
-    const signatureBytes = Buffer.from(signedMessage, 'base64');
+    const signatureBytes = Uint8Array.from(atob(signedMessage), (c) => c.charCodeAt(0));
     isValid = keypair.verify(messageBytes, signatureBytes);
   } catch {
     // fromPublicKey throws if the address is not a valid Stellar public key

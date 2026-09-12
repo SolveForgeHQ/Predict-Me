@@ -1,24 +1,26 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import MarketCard from "@/components/MarketCard";
 import { Market, MARKETS, loadMarketsWithSource } from "@/lib/markets";
 import StatusBanner from "@/components/StatusBanner";
 import { Search, TrendingUp, RefreshCw } from "lucide-react";
+import { useChain } from "@/context/ChainContext";
 
 const CATEGORIES = ["All", "Crypto", "Sports", "Finance", "Tech"] as const;
 
 export default function MarketsPage() {
+  const { chain, chainMetadata } = useChain();
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
   const [source, setSource] = useState<"backend" | "chain" | "fallback">("backend");
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const refreshMarkets = async () => {
+  const refreshMarkets = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await loadMarketsWithSource();
+      const res = await loadMarketsWithSource(chain);
       if (res.markets && res.markets.length > 0) {
         setMarkets(res.markets);
         setSource(res.source);
@@ -28,11 +30,11 @@ export default function MarketsPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [chain]);
 
   useEffect(() => {
     refreshMarkets();
-  }, []);
+  }, [refreshMarkets]);
 
   const filteredMarkets = markets.filter((m) => {
     const matchesCategory =
@@ -55,7 +57,7 @@ export default function MarketsPage() {
             </h1>
           </div>
           <p className="text-xs" style={{ color: "#8B93A7" }}>
-            Trade outcomes and predict the future on Stellar.
+            Trade outcomes and predict the future on {chainMetadata.name}.
           </p>
         </div>
         <div className="flex items-center gap-2">
