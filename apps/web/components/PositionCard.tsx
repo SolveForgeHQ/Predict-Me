@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Market } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
-import { fetchPosition, claimWinnings, ContractError } from "@/lib/contract";
+import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { Loader2, Gift, RefreshCw } from "lucide-react";
 
@@ -23,6 +23,7 @@ const STEP_LABEL: Record<PendingStep, string> = {
 export default function PositionCard({ market }: Props) {
   const { publicKey, connected, connect } = useWallet();
   const toast = useToast();
+  const { client } = useChain();
   const [yesShares, setYesShares] = useState<number>(0);
   const [noShares, setNoShares] = useState<number>(0);
   const [isLoadingPosition, setIsLoadingPosition] = useState(false);
@@ -44,7 +45,7 @@ export default function PositionCard({ market }: Props) {
     winningSide === "YES" ? yesShares : winningSide === "NO" ? noShares : 0;
   const hasWinningPosition = isResolved && winningShares > 0;
 
-  // ── Load live position from contract ───────────────────────
+  // ── Load live position from contract via the active chain client ───
   const loadPosition = useCallback(async () => {
     if (!connected || !publicKey) {
       setYesShares(0);
@@ -54,7 +55,7 @@ export default function PositionCard({ market }: Props) {
 
     setIsLoadingPosition(true);
     try {
-      const pos = await fetchPosition(publicKey, market.id);
+      const pos = await client.getPosition(market.id, publicKey);
       if (pos) {
         setYesShares(pos.yesShares);
         setNoShares(pos.noShares);
@@ -64,13 +65,13 @@ export default function PositionCard({ market }: Props) {
     } finally {
       setIsLoadingPosition(false);
     }
-  }, [connected, publicKey, market.id]);
+  }, [connected, publicKey, market.id, client]);
 
   useEffect(() => {
     loadPosition();
   }, [loadPosition]);
 
-  // ── Claim winnings ─────────────────────────────────────────
+  // ── Claim winnings via the active chain client ─────────────────────
   const handleClaim = async () => {
     if (!connected || !publicKey || !hasWinningPosition || isPending) return;
 
@@ -81,43 +82,26 @@ export default function PositionCard({ market }: Props) {
     try {
       await new Promise((r) => setTimeout(r, 0));
 
-      const callPromise = claimWinnings(publicKey, market.id);
+      const callPromise = client.claimWinnings({
+        marketId: market.id,
+        callerAddress: publicKey,
+      });
 
       const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
       const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
 
-      const hash = await callPromise;
+      const result = await callPromise;
 
       clearTimeout(signingTimer);
       clearTimeout(confirmingTimer);
 
-      setTxHash(hash);
+      setTxHash(result.txHash);
       toast.success("Winnings Claimed!", `Claimed ${winningShares} winning ${winningSide} shares.`);
 
       // Refresh on-chain balance after claim
       await loadPosition();
     } catch (err) {
-      let message = "Failed to claim winnings.";
-      if (err instanceof ContractError) {
-        switch (err.code) {
-          case "NOT_CONFIGURED":
-            message = "Contract not configured. Please check environment variables.";
-            break;
-          case "SIGN_REJECTED":
-            message = "Claim transaction was rejected in your wallet.";
-            break;
-          case "SIMULATION_FAILED":
-            message = `Simulation error: ${err.message}`;
-            break;
-          case "SUBMIT_FAILED":
-            message = `On-chain error: ${err.message}`;
-            break;
-          default:
-            message = err.message;
-        }
-      } else if (err instanceof Error) {
-        message = err.message;
-      }
+      const message = err instanceof Error ? err.message : "Failed to claim winnings.";
       setErrorMsg(message);
       toast.error("Claim Failed", message);
     } finally {

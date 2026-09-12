@@ -5,6 +5,7 @@ import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
 import { LogOut, Copy, Check, Loader2 } from "lucide-react";
+import ChainSwitcher from "@/components/ChainSwitcher";
 
 export default function TopBar() {
   const { publicKey, connected, connecting, error, connect, disconnect, clearError } =
@@ -57,8 +58,12 @@ export default function TopBar() {
             </span>
           </Link>
 
-          {/* Wallet button area */}
-          <div className="relative" ref={dropdownRef}>
+          {/* Controls: Chain Switcher & Wallet */}
+          <div className="flex items-center gap-2.5">
+            <ChainSwitcher />
+
+            {/* Wallet button area */}
+            <div className="relative" ref={dropdownRef}>
             {connected && publicKey ? (
               // Connected — show truncated address with dropdown
               <button
@@ -149,6 +154,7 @@ export default function TopBar() {
                 </button>
               </div>
             )}
+            </div>
           </div>
         </header>
       </div>

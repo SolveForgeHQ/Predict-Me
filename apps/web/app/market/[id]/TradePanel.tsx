@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Market } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
-import { buyShares, ContractError } from "@/lib/contract";
+import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { Wallet, Loader2 } from "lucide-react";
 
@@ -23,6 +23,7 @@ const STEP_LABEL: Record<PendingStep, string> = {
 export default function TradePanel({ market }: Props) {
   const { publicKey, connected, connecting, connect } = useWallet();
   const toast = useToast();
+  const { client, chainMetadata } = useChain();
   const [tab, setTab] = useState<"YES" | "NO">("YES");
   const [yesAmount, setYesAmount] = useState("");
   const [noAmount, setNoAmount] = useState("");
@@ -34,6 +35,7 @@ export default function TradePanel({ market }: Props) {
   const isPending = pendingStep !== null;
   const isYes = tab === "YES";
   const currentAmount = isYes ? yesAmount : noAmount;
+  const currency = chainMetadata.currency;
 
   const yesPrice = market.yesPercent / 100;
   const noPrice = market.noPercent / 100;
@@ -55,7 +57,7 @@ export default function TradePanel({ market }: Props) {
 
     const amountNum = parseFloat(currentAmount);
     if (!amountNum || amountNum <= 0) {
-      setErrorMsg("Please enter a valid XLM amount greater than 0.");
+      setErrorMsg(`Please enter a valid ${currency} amount greater than 0.`);
       return;
     }
 
@@ -66,47 +68,27 @@ export default function TradePanel({ market }: Props) {
     try {
       await new Promise((r) => setTimeout(r, 0));
 
-      const callPromise = buyShares(
-        publicKey!,
-        market.id,
-        tab,
-        amountNum
-      );
+      const callPromise = client.buyShares({
+        marketId: market.id,
+        outcome: tab.toLowerCase() as "yes" | "no",
+        amount: amountNum,
+        callerAddress: publicKey ?? undefined,
+      });
 
       const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
       const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
 
-      const hash = await callPromise;
+      const result = await callPromise;
 
       clearTimeout(signingTimer);
       clearTimeout(confirmingTimer);
 
-      setTxHash(hash);
+      setTxHash(result.txHash);
       toast.success("Trade Confirmed!", `Successfully purchased ${tab} shares on-chain.`);
       if (isYes) setYesAmount("");
       else setNoAmount("");
     } catch (err) {
-      let message = "Failed to execute trade.";
-      if (err instanceof ContractError) {
-        switch (err.code) {
-          case "NOT_CONFIGURED":
-            message = "Contract not configured. Please set NEXT_PUBLIC_MARKET_CONTRACT_ID in .env.local.";
-            break;
-          case "SIGN_REJECTED":
-            message = "Transaction was rejected in your wallet.";
-            break;
-          case "SIMULATION_FAILED":
-            message = `Simulation failed: ${err.message}`;
-            break;
-          case "SUBMIT_FAILED":
-            message = `Transaction failed on-chain: ${err.message}`;
-            break;
-          default:
-            message = err.message;
-        }
-      } else if (err instanceof Error) {
-        message = err.message;
-      }
+      const message = err instanceof Error ? err.message : "Failed to execute trade.";
       setErrorMsg(message);
       toast.error("Trade Failed", message);
       console.error("[TradePanel] buyShares error:", err);
@@ -183,7 +165,7 @@ export default function TradePanel({ market }: Props) {
         {/* Amount input */}
         <div>
           <label className="text-xs mb-2 block font-medium" style={{ color: "#8B93A7" }}>
-            Amount (XLM)
+            Amount ({currency})
           </label>
           <div
             className="flex items-center rounded-xl overflow-hidden"
@@ -196,7 +178,7 @@ export default function TradePanel({ market }: Props) {
               className="pl-3 text-sm select-none font-semibold"
               style={{ color: "#8B93A7" }}
             >
-              XLM
+              {currency}
             </span>
             <input
               type="number"

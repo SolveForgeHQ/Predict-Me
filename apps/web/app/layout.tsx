@@ -5,6 +5,7 @@ import TopBar from "@/components/TopBar";
 import BottomNav from "@/components/BottomNav";
 import { WalletProvider } from "@/context/WalletContext";
 import { ToastProvider } from "@/context/ToastContext";
+import { ChainProvider } from "@/context/ChainContext";
 
 const geist = Geist({
   variable: "--font-geist-sans",
@@ -27,14 +28,16 @@ export default function RootLayout({
         className="min-h-full flex flex-col antialiased"
         style={{ backgroundColor: "#0B0E14", color: "#F2F4F7" }}
       >
-        <WalletProvider>
-          <ToastProvider>
-            <TopBar />
-            {/* pb-20 reserves space so content never hides behind the floating bottom nav */}
-            <main className="flex-1 pb-20">{children}</main>
-            <BottomNav />
-          </ToastProvider>
-        </WalletProvider>
+        <ChainProvider>
+          <WalletProvider>
+            <ToastProvider>
+              <TopBar />
+              {/* pb-20 reserves space so content never hides behind the floating bottom nav */}
+              <main className="flex-1 pb-20">{children}</main>
+              <BottomNav />
+            </ToastProvider>
+          </WalletProvider>
+        </ChainProvider>
       </body>
     </html>
   );

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
-import { createMarket, resolveMarket, ContractError } from "@/lib/contract";
+import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { Wallet, ShieldOff, Loader2 } from "lucide-react";
 
@@ -36,6 +36,7 @@ interface ResolvingState {
 export default function AdminPage() {
   const { publicKey, connected, connecting, connect } = useWallet();
   const toast = useToast();
+  const { client } = useChain();
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
 
   // Form fields
@@ -71,22 +72,22 @@ export default function AdminPage() {
       setPendingStep("simulating");
       await new Promise((r) => setTimeout(r, 0));
 
-      const callPromise = createMarket(
-        publicKey!,
-        question.trim(),
-        endTimestampSec,
+      const callPromise = client.createMarket({
+        question: question.trim(),
+        endTime: endTimestampSec,
         category,
-      );
+        callerAddress: publicKey ?? undefined,
+      });
 
       const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
       const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
 
-      const hash = await callPromise;
+      const result = await callPromise;
 
       clearTimeout(signingTimer);
       clearTimeout(confirmingTimer);
 
-      setTxHash(hash);
+      setTxHash(result.txHash);
       toast.success("Market Created!", "Market has been registered on-chain.");
       setQuestion("");
       setEndDate("");
@@ -94,7 +95,7 @@ export default function AdminPage() {
 
       // Optimistically add to the local list so the admin sees it immediately
       const newMarket: Market = {
-        id: hash,
+        id: result.txHash,
         question: question.trim(),
         yesPercent: 50,
         noPercent: 50,
@@ -105,27 +106,7 @@ export default function AdminPage() {
       };
       setMarkets((prev) => [newMarket, ...prev]);
     } catch (err) {
-      let message = "Failed to create market.";
-      if (err instanceof ContractError) {
-        switch (err.code) {
-          case "NOT_CONFIGURED":
-            message = "Contract not configured. Set NEXT_PUBLIC_MARKET_CONTRACT_ID and NEXT_PUBLIC_SOROBAN_RPC_URL in .env.local.";
-            break;
-          case "SIGN_REJECTED":
-            message = "Transaction was rejected in your wallet. No changes were made.";
-            break;
-          case "SIMULATION_FAILED":
-            message = `Simulation failed: ${err.message}`;
-            break;
-          case "SUBMIT_FAILED":
-            message = `Transaction failed on-chain: ${err.message}`;
-            break;
-          default:
-            message = err.message;
-        }
-      } else if (err instanceof Error) {
-        message = err.message;
-      }
+      const message = err instanceof Error ? err.message : "Failed to create market.";
       setErrorMsg(message);
       toast.error("Market Creation Failed", message);
       console.error("[admin] createMarket error:", err);
@@ -145,7 +126,11 @@ export default function AdminPage() {
     try {
       await new Promise((r) => setTimeout(r, 0));
 
-      const callPromise = resolveMarket(publicKey!, marketId, outcome);
+      const callPromise = client.resolveMarket({
+        marketId,
+        outcome: outcome.toLowerCase() as "yes" | "no",
+        callerAddress: publicKey ?? undefined,
+      });
 
       const signingTimer = setTimeout(() => {
         setResolvingState((prev) => prev ? { ...prev, step: "signing" } : null);
@@ -155,12 +140,12 @@ export default function AdminPage() {
         setResolvingState((prev) => prev ? { ...prev, step: "confirming" } : null);
       }, 2000);
 
-      const hash = await callPromise;
+      const result = await callPromise;
 
       clearTimeout(signingTimer);
       clearTimeout(confirmingTimer);
 
-      setResolveSuccess({ marketId, txHash: hash, outcome });
+      setResolveSuccess({ marketId, txHash: result.txHash, outcome });
       toast.success("Market Resolved!", `Market resolved ${outcome} on-chain.`);
 
       // Update market status in UI once confirmed on-chain
@@ -169,24 +154,7 @@ export default function AdminPage() {
         prev.map((m) => (m.id === marketId ? { ...m, status: newStatus } : m))
       );
     } catch (err) {
-      let message = "Failed to resolve market.";
-      if (err instanceof ContractError) {
-        switch (err.code) {
-          case "SIGN_REJECTED":
-            message = "Resolution was rejected in your wallet.";
-            break;
-          case "SIMULATION_FAILED":
-            message = `Simulation error: ${err.message}`;
-            break;
-          case "SUBMIT_FAILED":
-            message = `On-chain execution error: ${err.message}`;
-            break;
-          default:
-            message = err.message;
-        }
-      } else if (err instanceof Error) {
-        message = err.message;
-      }
+      const message = err instanceof Error ? err.message : "Failed to resolve market.";
       setResolveError({ marketId, message });
       toast.error("Resolution Failed", message);
     } finally {
