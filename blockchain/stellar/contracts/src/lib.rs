@@ -1,31 +1,20 @@
 // lib.rs
 // Main contract entrypoint for the predict-me prediction market.
-// Declares the contract struct and wires the public-facing functions
-// to their implementations in market.rs.
-//
-// Public interface:
-//   create_market(env, question, end_timestamp, category) -> u32
-//   buy_shares(env, market_id, side, amount)
-//   resolve_market(env, market_id, outcome)   -- admin only
-//   claim_winnings(env, market_id)
-//
-// Storage helpers are in storage.rs.
-// All business logic lives in market.rs.
 
 #![no_std]
 
-mod market;
-mod storage;
+pub mod market;
+pub mod storage;
 
-use soroban_sdk::{contract, contractimpl, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use storage::MarketState;
 
 #[contract]
 pub struct PredictMeContract;
 
 #[contractimpl]
 impl PredictMeContract {
-    /// Create a new prediction market. Only callable by the admin address
-    /// stored in contract storage at deploy time.
+    /// Create a new prediction market.
     /// Returns the new market's u32 id.
     pub fn create_market(
         env: Env,
@@ -36,22 +25,35 @@ impl PredictMeContract {
         market::create_market(env, question, end_timestamp, category)
     }
 
-    /// Buy YES or NO shares in a market. Transfers XLM from caller to contract.
-    /// side: 0 = YES, 1 = NO
-    pub fn buy_shares(env: Env, market_id: u32, side: u32, amount: i128) {
-        market::buy_shares(env, market_id, side, amount)
+    /// Buy YES (0) or NO (1) shares in a market.
+    pub fn buy_shares(
+        env: Env,
+        market_id: u32,
+        side: u32,
+        amount: i128,
+        caller: Address,
+    ) {
+        market::buy_shares(env, market_id, side, amount, caller)
     }
 
-    /// Resolve a market with its final outcome. Admin only.
-    /// outcome: 0 = YES, 1 = NO
+    /// Resolve a market with its final outcome (0 = YES, 1 = NO).
     pub fn resolve_market(env: Env, market_id: u32, outcome: u32) {
         market::resolve_market(env, market_id, outcome)
     }
 
     /// Claim winnings for the calling wallet on a resolved market.
-    pub fn claim_winnings(env: Env, market_id: u32) {
-        market::claim_winnings(env, market_id)
+    /// Returns the payout amount.
+    pub fn claim_winnings(env: Env, market_id: u32, caller: Address) -> i128 {
+        market::claim_winnings(env, market_id, caller)
+    }
+
+    /// Read market state.
+    pub fn get_market(env: Env, market_id: u32) -> Option<MarketState> {
+        storage::get_market(&env, market_id)
+    }
+
+    /// Read a user's share balance for a given side.
+    pub fn get_shares(env: Env, market_id: u32, holder: Address, side: u32) -> i128 {
+        storage::get_shares(&env, market_id, &holder, side)
     }
 }
-
-mod test;

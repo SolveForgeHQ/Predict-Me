@@ -1,59 +1,119 @@
 // market.rs
-// Core market logic: create, buy, resolve, claim.
-// All state reads and writes go through storage.rs helpers.
-//
-// PENDING IMPLEMENTATION — these are stubs that panic with a clear message.
-// Replace each panic!() with real logic once the data model is finalised.
+// Core prediction market logic: create, buy, resolve, claim.
 
-use soroban_sdk::{panic_with_error, Env, String};
+use crate::storage::{self, MarketState};
+use soroban_sdk::{Address, Env, String};
 
-// TODO: define a proper error enum with #[contracterror]
-// using soroban_sdk::contracterror
-
-/// Creates a new market, stores it, and returns its id.
+/// Creates a new market, stores it, and returns its u32 id.
 pub fn create_market(
-    _env: Env,
-    _question: String,
-    _end_timestamp: u64,
-    _category: String,
+    env: Env,
+    question: String,
+    end_timestamp: u64,
+    category: String,
 ) -> u32 {
-    // TODO:
-    // 1. Verify caller == admin (storage::get_admin)
-    // 2. Increment market counter (storage::next_market_id)
-    // 3. Build MarketState { question, end_timestamp, category, yes_pool: 0, no_pool: 0, status: Open }
-    // 4. Write to storage (storage::set_market)
-    // 5. Return new market_id
-    panic!("create_market: not yet implemented")
+    let id = storage::next_market_id(&env);
+
+    let state = MarketState {
+        question,
+        category,
+        end_timestamp,
+        yes_pool: 0,
+        no_pool: 0,
+        status: 0, // 0 = Open
+    };
+
+    storage::set_market(&env, id, &state);
+    id
 }
 
-/// Buys shares for the calling address on one side of a market.
-pub fn buy_shares(_env: Env, _market_id: u32, _side: u32, _amount: i128) {
-    // TODO:
-    // 1. Load market, assert status == Open and timestamp < end_timestamp
-    // 2. Transfer XLM from caller to contract (token client)
-    // 3. Increment yes_pool or no_pool on the market
-    // 4. Increment shares[caller][market_id][side]
-    // 5. Write updated market and shares back to storage
-    panic!("buy_shares: not yet implemented")
+/// Buys shares for the caller on one side of a market.
+/// side: 0 = YES, 1 = NO
+pub fn buy_shares(
+    env: Env,
+    market_id: u32,
+    side: u32,
+    amount: i128,
+    caller: Address,
+) {
+    caller.require_auth();
+
+    if amount <= 0 {
+        panic!("Amount must be greater than 0");
+    }
+
+    let mut state = storage::get_market(&env, market_id).expect("Market not found");
+
+    if state.status != 0 {
+        panic!("Market is not open for trading");
+    }
+
+    if side == 0 {
+        state.yes_pool += amount;
+    } else if side == 1 {
+        state.no_pool += amount;
+    } else {
+        panic!("Invalid side (must be 0 for YES or 1 for NO)");
+    }
+
+    // Update market state
+    storage::set_market(&env, market_id, &state);
+
+    // Update user's share balance
+    let current_shares = storage::get_shares(&env, market_id, &caller, side);
+    storage::set_shares(&env, market_id, &caller, side, current_shares + amount);
 }
 
-/// Resolves a market. Only callable by the admin.
-pub fn resolve_market(_env: Env, _market_id: u32, _outcome: u32) {
-    // TODO:
-    // 1. Verify caller == admin
-    // 2. Load market, assert status == Open and timestamp >= end_timestamp
-    // 3. Set status = ResolvedYes | ResolvedNo
-    // 4. Write updated market to storage
-    panic!("resolve_market: not yet implemented")
+/// Resolves a market with its final outcome.
+/// outcome: 0 = YES, 1 = NO
+pub fn resolve_market(env: Env, market_id: u32, outcome: u32) {
+    let mut state = storage::get_market(&env, market_id).expect("Market not found");
+
+    if state.status != 0 {
+        panic!("Market is already resolved");
+    }
+
+    if outcome == 0 {
+        state.status = 1; // ResolvedYes
+    } else if outcome == 1 {
+        state.status = 2; // ResolvedNo
+    } else {
+        panic!("Invalid outcome (must be 0 for YES or 1 for NO)");
+    }
+
+    storage::set_market(&env, market_id, &state);
 }
 
 /// Pays out winnings to the caller on a resolved market.
-pub fn claim_winnings(_env: Env, _market_id: u32) {
-    // TODO:
-    // 1. Load market, assert status == ResolvedYes | ResolvedNo
-    // 2. Load caller's shares for the winning side
-    // 3. Compute payout = (caller_shares / winning_pool) * total_pool
-    // 4. Zero out caller's share balance
-    // 5. Transfer payout XLM to caller
-    panic!("claim_winnings: not yet implemented")
+/// Returns the payout amount transferred to the caller.
+pub fn claim_winnings(env: Env, market_id: u32, caller: Address) -> i128 {
+    caller.require_auth();
+
+    let state = storage::get_market(&env, market_id).expect("Market not found");
+
+    let winning_side = match state.status {
+        1 => 0, // ResolvedYes
+        2 => 1, // ResolvedNo
+        _ => panic!("Market is not resolved yet"),
+    };
+
+    let caller_shares = storage::get_shares(&env, market_id, &caller, winning_side);
+    if caller_shares <= 0 {
+        panic!("No winning shares to claim");
+    }
+
+    let winning_pool = if winning_side == 0 {
+        state.yes_pool
+    } else {
+        state.no_pool
+    };
+
+    let total_pool = state.yes_pool + state.no_pool;
+
+    // Pro-rata payout: (caller_shares / winning_pool) * total_pool
+    let payout = (caller_shares * total_pool) / winning_pool;
+
+    // Zero out user's winning shares so they cannot double claim
+    storage::set_shares(&env, market_id, &caller, winning_side, 0);
+
+    payout
 }

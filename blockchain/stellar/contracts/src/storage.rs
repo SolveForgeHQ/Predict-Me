@@ -1,16 +1,5 @@
 // storage.rs
 // Soroban contract storage helpers.
-// Centralises all DataKey definitions and read/write operations so
-// the rest of the contract never touches env.storage() directly.
-//
-// Planned storage layout:
-//
-//   DataKey::Admin                           -> Address
-//   DataKey::MarketCount                     -> u32
-//   DataKey::Market(market_id: u32)          -> MarketState
-//   DataKey::Shares(market_id, addr, side)   -> i128
-//
-// All functions are stubs — implement alongside market.rs.
 
 use soroban_sdk::{contracttype, Address, Env};
 
@@ -19,8 +8,9 @@ use soroban_sdk::{contracttype, Address, Env};
 // ---------------------------------------------------------------------------
 
 #[contracttype]
+#[derive(Clone)]
 pub enum DataKey {
-    /// The admin address — only this address can create and resolve markets
+    /// The admin address
     Admin,
     /// Auto-incrementing counter used to assign market ids
     MarketCount,
@@ -36,7 +26,7 @@ pub enum DataKey {
 // ---------------------------------------------------------------------------
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MarketState {
     pub question: soroban_sdk::String,
     pub category: soroban_sdk::String,
@@ -48,40 +38,44 @@ pub struct MarketState {
 }
 
 // ---------------------------------------------------------------------------
-// Storage accessors (stubs)
+// Storage accessors
 // ---------------------------------------------------------------------------
 
-/// Returns the admin Address stored at deploy time.
-/// TODO: implement with env.storage().instance().get(&DataKey::Admin)
-pub fn get_admin(_env: &Env) -> Address {
-    panic!("storage::get_admin: not yet implemented")
+pub fn get_admin(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Admin)
 }
 
-/// Returns the next market id and increments the counter.
-/// TODO: read MarketCount, increment, write back, return old value
-pub fn next_market_id(_env: &Env) -> u32 {
-    panic!("storage::next_market_id: not yet implemented")
+pub fn set_admin(env: &Env, admin: &Address) {
+    env.storage().instance().set(&DataKey::Admin, admin);
 }
 
-/// Writes a MarketState to persistent storage.
-/// TODO: env.storage().persistent().set(&DataKey::Market(id), &state)
-pub fn set_market(_env: &Env, _id: u32, _state: MarketState) {
-    panic!("storage::set_market: not yet implemented")
+pub fn get_market_count(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::MarketCount).unwrap_or(0)
 }
 
-/// Reads a MarketState from persistent storage.
-/// TODO: env.storage().persistent().get(&DataKey::Market(id))
-pub fn get_market(_env: &Env, _id: u32) -> MarketState {
-    panic!("storage::get_market: not yet implemented")
+pub fn next_market_id(env: &Env) -> u32 {
+    let count = get_market_count(env) + 1;
+    env.storage().instance().set(&DataKey::MarketCount, &count);
+    count
 }
 
-/// Reads the share balance for a given (market, address, side).
-/// Returns 0 if no entry exists.
-pub fn get_shares(_env: &Env, _market_id: u32, _holder: &Address, _side: u32) -> i128 {
-    panic!("storage::get_shares: not yet implemented")
+pub fn set_market(env: &Env, id: u32, state: &MarketState) {
+    env.storage().persistent().set(&DataKey::Market(id), state);
 }
 
-/// Writes the share balance for a given (market, address, side).
-pub fn set_shares(_env: &Env, _market_id: u32, _holder: &Address, _side: u32, _amount: i128) {
-    panic!("storage::set_shares: not yet implemented")
+pub fn get_market(env: &Env, id: u32) -> Option<MarketState> {
+    env.storage().persistent().get(&DataKey::Market(id))
+}
+
+pub fn get_shares(env: &Env, market_id: u32, holder: &Address, side: u32) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Shares(market_id, holder.clone(), side))
+        .unwrap_or(0)
+}
+
+pub fn set_shares(env: &Env, market_id: u32, holder: &Address, side: u32, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Shares(market_id, holder.clone(), side), &amount);
 }
