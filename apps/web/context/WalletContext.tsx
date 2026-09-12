@@ -24,7 +24,8 @@ import {
 import { loginWithWallet } from "@/lib/auth";
 import { clearSessionToken } from "@/lib/api";
 import { useChain } from "@/context/ChainContext";
-import { useAccount, useDisconnect } from "wagmi";
+import { useAccount, useDisconnect, useSwitchChain } from "wagmi";
+import { avalancheFuji } from "viem/chains";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 
 // ── Context shape ────────────────────────────────────────────
@@ -33,6 +34,9 @@ interface WalletContextValue {
   publicKey: string | null;
   connected: boolean;
   connecting: boolean;
+  isWrongNetwork: boolean;
+  targetChainName: string;
+  switchNetwork: () => Promise<void>;
   /** null = no error */
   error: { code: WalletErrorCode; message: string } | null;
   connect: () => Promise<void>;
@@ -57,7 +61,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [restoringStellar, setRestoringStellar] = useState(true);
 
   // ── Avalanche / EVM State (Wagmi + RainbowKit) ──
-  const { address: evmAddress, isConnected: isEvmConnected, isConnecting: isEvmConnecting } = useAccount();
+  const { address: evmAddress, isConnected: isEvmConnected, isConnecting: isEvmConnecting, chainId } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
   const { disconnectAsync: disconnectEvm } = useDisconnect();
   const { openConnectModal } = useConnectModal();
 
@@ -104,6 +109,24 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // ── Chain-Aware Dispatch ──
   const isAvalanche = chain === "avalanche";
+  const targetChainName = isAvalanche ? "Avalanche Fuji" : "Stellar Testnet";
+
+  const isWrongNetwork = Boolean(
+    isAvalanche &&
+    isEvmConnected &&
+    chainId !== undefined &&
+    chainId !== avalancheFuji.id
+  );
+
+  const switchNetwork = useCallback(async () => {
+    if (isAvalanche && switchChainAsync) {
+      try {
+        await switchChainAsync({ chainId: avalancheFuji.id });
+      } catch (err) {
+        console.warn("Failed to switch network:", err);
+      }
+    }
+  }, [isAvalanche, switchChainAsync]);
 
   const publicKey = isAvalanche
     ? (evmAddress ?? null)
@@ -147,6 +170,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           publicKey: null,
           connected: false,
           connecting: false,
+          isWrongNetwork: false,
+          targetChainName,
+          switchNetwork,
           error: null,
           connect,
           disconnect,
@@ -166,6 +192,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         publicKey,
         connected,
         connecting,
+        isWrongNetwork,
+        targetChainName,
+        switchNetwork,
         error: isAvalanche ? null : stellarError,
         connect,
         disconnect,

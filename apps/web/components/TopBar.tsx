@@ -18,8 +18,17 @@ function formatAddress(address: string): string {
 }
 
 export default function TopBar() {
-  const { publicKey, connected, connecting, error, connect, disconnect, clearError } =
-    useWallet();
+  const {
+    publicKey,
+    connected,
+    connecting,
+    isWrongNetwork,
+    switchNetwork,
+    error,
+    connect,
+    disconnect,
+    clearError,
+  } = useWallet();
   const { chain, chainMetadata } = useChain();
   const { openAccountModal } = useAccountModal();
 
@@ -79,25 +88,43 @@ export default function TopBar() {
             {/* Wallet button area */}
             <div className="relative" ref={dropdownRef}>
             {connected && publicKey ? (
-              // Connected — show truncated address with dropdown
-              <button
-                onClick={() => setDropdownOpen((o) => !o)}
-                className="text-sm font-semibold px-3 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-2"
-                style={{
-                  borderColor: chainMetadata.borderColor,
-                  color: chainMetadata.color,
-                  backgroundColor: chainMetadata.badgeBg,
-                }}
-              >
-                <span
-                  className="w-2 h-2 rounded-full"
+              isWrongNetwork ? (
+                // Connected but on wrong EVM chain — prompt to switch network
+                <button
+                  onClick={switchNetwork}
+                  title="Wrong network selected. Click to switch to Avalanche Fuji."
+                  className="text-xs font-bold px-3 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-1.5 cursor-pointer"
                   style={{
-                    backgroundColor: chainMetadata.color,
-                    boxShadow: `0 0 6px ${chainMetadata.color}`,
+                    borderColor: "#E84142",
+                    color: "#FFFFFF",
+                    backgroundColor: "#E84142",
+                    boxShadow: "0 0 14px rgba(232, 65, 66, 0.4)",
                   }}
-                />
-                {formatAddress(publicKey)}
-              </button>
+                >
+                  <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                  Switch to Fuji
+                </button>
+              ) : (
+                // Connected — show truncated address with dropdown
+                <button
+                  onClick={() => setDropdownOpen((o) => !o)}
+                  className="text-sm font-semibold px-3 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-2"
+                  style={{
+                    borderColor: chainMetadata.borderColor,
+                    color: chainMetadata.color,
+                    backgroundColor: chainMetadata.badgeBg,
+                  }}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{
+                      backgroundColor: chainMetadata.color,
+                      boxShadow: `0 0 6px ${chainMetadata.color}`,
+                    }}
+                  />
+                  {formatAddress(publicKey)}
+                </button>
+              )
             ) : (
               // Not connected
               <button

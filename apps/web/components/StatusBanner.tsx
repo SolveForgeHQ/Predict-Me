@@ -8,7 +8,8 @@ export type BannerVariant =
   | "error"
   | "success"
   | "wallet_required"
-  | "backend_offline";
+  | "backend_offline"
+  | "wrong_network";
 
 interface Props {
   variant: BannerVariant;
@@ -144,6 +145,39 @@ export default function StatusBanner({
           <AlertTriangle size={14} className="shrink-0 text-[#F59E0B]" />
           <span>Backend sync offline. Operating directly via Soroban RPC.</span>
         </div>
+      </div>
+    );
+  }
+
+  // ── 6. Wrong Network ───────────────────────────────────────
+  if (variant === "wrong_network") {
+    return (
+      <div
+        className="rounded-xl p-4 text-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left"
+        style={{
+          backgroundColor: "#20120D",
+          border: "1px solid #E8414255",
+          color: "#F2F4F7",
+        }}
+      >
+        <div className="flex items-center gap-2.5">
+          <AlertTriangle size={16} className="text-[#E84142] shrink-0" />
+          <div>
+            <p className="font-bold text-[#E84142]">{title ?? "Wrong Network"}</p>
+            <p className="text-[#8B93A7] text-[11px] mt-0.5">
+              {message ?? "Your wallet is connected to an unsupported network. Please switch to Avalanche Fuji."}
+            </p>
+          </div>
+        </div>
+        {onAction && (
+          <button
+            onClick={onAction}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-bold shrink-0 text-white transition-opacity hover:opacity-90 cursor-pointer"
+            style={{ backgroundColor: "#E84142" }}
+          >
+            {actionLabel ?? "Switch Network"}
+          </button>
+        )}
       </div>
     );
   }

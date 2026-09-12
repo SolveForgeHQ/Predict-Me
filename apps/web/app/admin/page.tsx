@@ -6,6 +6,7 @@ import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
+import { parseTransactionError } from "@/lib/errors";
 import { Wallet, ShieldOff, Loader2 } from "lucide-react";
 
 // Describes which step of the on-chain flow we're in
@@ -29,7 +30,7 @@ interface ResolvingState {
 }
 
 export default function AdminPage() {
-  const { publicKey, connected, connecting, connect } = useWallet();
+  const { publicKey, connected, connecting, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { chain, chainMetadata, client } = useChain();
   const [markets, setMarkets] = useState<Market[]>(MARKETS);
@@ -125,6 +126,11 @@ export default function AdminPage() {
       return;
     }
 
+    if (isWrongNetwork) {
+      await switchNetwork();
+      return;
+    }
+
     try {
       setPendingStep("simulating");
       await new Promise((r) => setTimeout(r, 0));
@@ -169,27 +175,11 @@ export default function AdminPage() {
       };
       setMarkets((prev) => [newMarket, ...prev]);
     } catch (err) {
-      let message = "Failed to create market.";
-      if (err instanceof Error) {
-        if (
-          err.message.includes("User rejected") ||
-          err.message.includes("User denied") ||
-          err.message.includes("rejected in your wallet")
-        ) {
-          message = "Transaction was cancelled in your wallet.";
-        } else if (
-          err.message.includes("OwnableUnauthorizedAccount") ||
-          err.message.includes("caller is not the owner")
-        ) {
-          message = "Access restricted: Only the contract owner can create markets on Avalanche.";
-        } else if (err.message.includes("InvalidEndTime")) {
-          message = "Resolution date must be in the future.";
-        } else if (err.message.includes("EmptyQuestion")) {
-          message = "Market question cannot be empty.";
-        } else {
-          message = err.message;
-        }
-      }
+      const message = parseTransactionError(err, {
+        chain,
+        currency: chainMetadata.currency,
+        action: "create",
+      });
       setErrorMsg(message);
       toast.error("Market Creation Failed", message);
       console.error("[admin] createMarket error:", err);
@@ -200,7 +190,10 @@ export default function AdminPage() {
 
   // ── Resolve market ─────────────────────────────────────────
   const handleResolve = async (marketId: string, outcome: "YES" | "NO") => {
-    if (!isAdmin || isResolving || isPending) return;
+    if (isWrongNetwork) {
+      await switchNetwork();
+      return;
+    }
 
     setResolveError(null);
     setResolveSuccess(null);
@@ -242,33 +235,11 @@ export default function AdminPage() {
         prev.map((m) => (m.id === marketId ? { ...m, status: newStatus } : m))
       );
     } catch (err) {
-      let message = "Failed to resolve market.";
-      if (err instanceof Error) {
-        const raw = err.message;
-        if (
-          raw.includes("User rejected") ||
-          raw.includes("User denied") ||
-          raw.includes("rejected in your wallet") ||
-          raw.includes("rejected in wallet")
-        ) {
-          message = "Resolution transaction was cancelled in your wallet.";
-        } else if (
-          raw.includes("OwnableUnauthorizedAccount") ||
-          raw.includes("caller is not the owner")
-        ) {
-          message = "Access restricted: Only the contract owner can resolve markets on Avalanche.";
-        } else if (raw.includes("MarketNotFound")) {
-          message = "Market does not exist on the smart contract.";
-        } else if (raw.includes("MarketNotOpen")) {
-          message = "This market is not open or has already been resolved.";
-        } else if (raw.includes("not configured")) {
-          message = raw;
-        } else if (raw.includes("WalletClient is required")) {
-          message = `Please connect your ${chainMetadata.shortName} owner wallet to resolve markets.`;
-        } else {
-          message = raw;
-        }
-      }
+      const message = parseTransactionError(err, {
+        chain,
+        currency: chainMetadata.currency,
+        action: "resolve",
+      });
       setResolveError({ marketId, message });
       toast.error("Resolution Failed", message);
       console.error("[admin] resolveMarket error:", err);
@@ -420,6 +391,19 @@ export default function AdminPage() {
           </div>
         </div>
 
+        {/* Wrong network alert */}
+        {connected && isWrongNetwork && (
+          <div className="mb-8">
+            <StatusBanner
+              variant="wrong_network"
+              title="Wrong Network Connected"
+              message={`Your wallet is connected to an unsupported network. Please switch to ${chainMetadata.name} to create and resolve markets.`}
+              onAction={switchNetwork}
+              actionLabel="Switch Network"
+            />
+          </div>
+        )}
+
         {/* Create form */}
         <div
           className="rounded-2xl p-6 mb-8"
@@ -532,24 +516,38 @@ export default function AdminPage() {
               />
             )}
 
-            <button
-              type="submit"
-              disabled={isPending || isResolving}
-              className="self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-lg"
-              style={{
-                backgroundColor: chainMetadata.color,
-                boxShadow: `0 0 16px ${chainMetadata.color}40`,
-              }}
-            >
-              {isPending ? (
-                <>
-                  <Loader2 size={14} className="animate-spin" />
-                  Creating on {chainMetadata.shortName}…
-                </>
-              ) : (
-                `+ Create Market on ${chainMetadata.shortName}`
-              )}
-            </button>
+            {isWrongNetwork ? (
+              <button
+                type="button"
+                onClick={switchNetwork}
+                className="self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-opacity hover:opacity-90 text-white shadow-lg cursor-pointer"
+                style={{
+                  backgroundColor: "#E84142",
+                  boxShadow: "0 0 16px rgba(232, 65, 66, 0.4)",
+                }}
+              >
+                Switch to {chainMetadata.name}
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={isPending || isResolving}
+                className="self-start px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-lg"
+                style={{
+                  backgroundColor: chainMetadata.color,
+                  boxShadow: `0 0 16px ${chainMetadata.color}40`,
+                }}
+              >
+                {isPending ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Creating on {chainMetadata.shortName}…
+                  </>
+                ) : (
+                  `+ Create Market on ${chainMetadata.shortName}`
+                )}
+              </button>
+            )}
           </form>
         </div>
 

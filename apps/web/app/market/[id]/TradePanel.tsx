@@ -6,6 +6,7 @@ import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
+import { parseTransactionError } from "@/lib/errors";
 import { Wallet, Loader2 } from "lucide-react";
 
 interface Props {
@@ -15,7 +16,7 @@ interface Props {
 type PendingStep = "simulating" | "signing" | "confirming";
 
 export default function TradePanel({ market }: Props) {
-  const { publicKey, connected, connecting, connect } = useWallet();
+  const { publicKey, connected, connecting, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { chain, client, chainMetadata } = useChain();
   const [tab, setTab] = useState<"YES" | "NO">("YES");
@@ -62,6 +63,11 @@ export default function TradePanel({ market }: Props) {
       return;
     }
 
+    if (isWrongNetwork) {
+      await switchNetwork();
+      return;
+    }
+
     const amountNum = parseFloat(currentAmount);
     if (!amountNum || amountNum <= 0) {
       setErrorMsg(`Please enter a valid ${currency} amount greater than 0.`);
@@ -98,34 +104,11 @@ export default function TradePanel({ market }: Props) {
       if (isYes) setYesAmount("");
       else setNoAmount("");
     } catch (err) {
-      let message = "Failed to execute trade.";
-      if (err instanceof Error) {
-        const raw = err.message;
-        if (
-          raw.includes("User rejected") ||
-          raw.includes("User denied") ||
-          raw.includes("rejected in your wallet") ||
-          raw.includes("rejected in wallet")
-        ) {
-          message = "Transaction was cancelled in your wallet.";
-        } else if (raw.includes("insufficient funds") || raw.includes("exceeds balance")) {
-          message = `Insufficient ${currency} balance to complete this purchase (including gas fees).`;
-        } else if (raw.includes("MarketNotFound")) {
-          message = "Market does not exist on the smart contract.";
-        } else if (raw.includes("MarketNotOpen")) {
-          message = "This market is closed or has already been resolved.";
-        } else if (raw.includes("MarketExpired")) {
-          message = "This market has expired and is no longer accepting trades.";
-        } else if (raw.includes("ZeroDeposit")) {
-          message = `Amount must be greater than 0 ${currency}.`;
-        } else if (raw.includes("not configured")) {
-          message = raw;
-        } else if (raw.includes("WalletClient is required")) {
-          message = `Please connect your ${chainMetadata.shortName} wallet to trade.`;
-        } else {
-          message = raw;
-        }
-      }
+      const message = parseTransactionError(err, {
+        chain,
+        currency,
+        action: "trade",
+      });
       setErrorMsg(message);
       toast.error("Trade Failed", message);
       console.error("[TradePanel] buyShares error:", err);
@@ -246,6 +229,17 @@ export default function TradePanel({ market }: Props) {
           </span>
         </div>
 
+        {/* Wrong network warning */}
+        {connected && isWrongNetwork && !isPending && (
+          <StatusBanner
+            variant="wrong_network"
+            title="Wrong Network Selected"
+            message={`Your wallet is connected to an unsupported network. Please switch to ${chainMetadata.name} to trade.`}
+            onAction={switchNetwork}
+            actionLabel="Switch Network"
+          />
+        )}
+
         {/* Pending step indicator */}
         {isPending && (
           <StatusBanner variant="pending" stepLabel={getStepLabel(pendingStep!)} />
@@ -267,28 +261,45 @@ export default function TradePanel({ market }: Props) {
 
         {/* Buy / Connect button */}
         {connected ? (
-          <button
-            onClick={handleBuy}
-            disabled={isPending || !currentAmount || parseFloat(currentAmount) <= 0}
-            className={`w-full flex items-center justify-center gap-2 transition-all ${
-              isYes ? "btn-yes" : "btn-no"
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-            style={{
-              padding: "0.875rem",
-              borderRadius: "0.75rem",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-            }}
-          >
-            {isPending ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                Processing trade on {chainMetadata.shortName}…
-              </>
-            ) : (
-              `Buy ${tab}`
-            )}
-          </button>
+          isWrongNetwork ? (
+            <button
+              onClick={switchNetwork}
+              className="w-full flex items-center justify-center gap-2 transition-all cursor-pointer text-white"
+              style={{
+                backgroundColor: "#E84142",
+                padding: "0.875rem",
+                borderRadius: "0.75rem",
+                fontWeight: 700,
+                fontSize: "0.875rem",
+                boxShadow: "0 0 16px rgba(232, 65, 66, 0.35)",
+              }}
+            >
+              Switch to {chainMetadata.name}
+            </button>
+          ) : (
+            <button
+              onClick={handleBuy}
+              disabled={isPending || !currentAmount || parseFloat(currentAmount) <= 0}
+              className={`w-full flex items-center justify-center gap-2 transition-all ${
+                isYes ? "btn-yes" : "btn-no"
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              style={{
+                padding: "0.875rem",
+                borderRadius: "0.75rem",
+                fontWeight: 700,
+                fontSize: "0.875rem",
+              }}
+            >
+              {isPending ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" />
+                  Processing trade on {chainMetadata.shortName}…
+                </>
+              ) : (
+                `Buy ${tab}`
+              )}
+            </button>
+          )
         ) : (
           <button
             onClick={connect}

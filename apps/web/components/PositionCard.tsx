@@ -6,6 +6,7 @@ import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
+import { parseTransactionError } from "@/lib/errors";
 import { Loader2, Gift, RefreshCw } from "lucide-react";
 
 interface Props {
@@ -22,7 +23,7 @@ const STEP_LABEL: Record<PendingStep, string> = {
 };
 
 export default function PositionCard({ market }: Props) {
-  const { publicKey, connected, connect } = useWallet();
+  const { publicKey, connected, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { client, chain, chainMetadata } = useChain();
   const [yesShares, setYesShares] = useState<number>(0);
@@ -111,6 +112,11 @@ export default function PositionCard({ market }: Props) {
   const handleClaim = async () => {
     if (!connected || !publicKey || !hasWinningPosition || isPending) return;
 
+    if (isWrongNetwork) {
+      await switchNetwork();
+      return;
+    }
+
     setErrorMsg("");
     setTxHash("");
     setPendingStep("simulating");
@@ -147,30 +153,11 @@ export default function PositionCard({ market }: Props) {
       // Refresh on-chain balance after claim
       await loadPositionAndMarket();
     } catch (err) {
-      let message = "Failed to claim winnings.";
-      if (err instanceof Error) {
-        const raw = err.message;
-        if (
-          raw.includes("User rejected") ||
-          raw.includes("User denied") ||
-          raw.includes("rejected in your wallet") ||
-          raw.includes("rejected in wallet")
-        ) {
-          message = "Transaction was cancelled in your wallet.";
-        } else if (raw.includes("MarketNotResolved")) {
-          message = "This market has not been resolved yet.";
-        } else if (raw.includes("NoWinningShares")) {
-          message = "You have no winning shares to claim in this market.";
-        } else if (raw.includes("TransferFailed")) {
-          message = "Payout transfer failed on-chain.";
-        } else if (raw.includes("not configured")) {
-          message = raw;
-        } else if (raw.includes("WalletClient is required")) {
-          message = `Please connect your ${chainMetadata.shortName} wallet to claim winnings.`;
-        } else {
-          message = raw;
-        }
-      }
+      const message = parseTransactionError(err, {
+        chain,
+        currency: chainMetadata.currency,
+        action: "claim",
+      });
       setErrorMsg(message);
       toast.error("Claim Failed", message);
       console.error("[PositionCard] claimWinnings error:", err);
@@ -283,28 +270,54 @@ export default function PositionCard({ market }: Props) {
             </span>
           </div>
 
-          <button
-            onClick={handleClaim}
-            disabled={isPending}
-            className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
-            style={{
-              backgroundColor: "#00D084",
-              color: "#0B0E14",
-              boxShadow: "0 0 24px rgba(0,208,132,0.35)",
-            }}
-          >
-            {isPending ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                {getStepLabel(pendingStep!)}
-              </>
-            ) : (
-              <>
-                <Gift size={16} strokeWidth={2.2} />
-                Claim Winnings
-              </>
-            )}
-          </button>
+          {/* Wrong network alert for claiming */}
+          {isWrongNetwork && !isPending && (
+            <div className="mb-3">
+              <StatusBanner
+                variant="wrong_network"
+                title="Wrong Network"
+                message={`Your wallet is connected to an unsupported network. Please switch to ${chainMetadata.name} to claim winnings.`}
+                onAction={switchNetwork}
+                actionLabel="Switch Network"
+              />
+            </div>
+          )}
+
+          {isWrongNetwork ? (
+            <button
+              onClick={switchNetwork}
+              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg text-white cursor-pointer"
+              style={{
+                backgroundColor: "#E84142",
+                boxShadow: "0 0 24px rgba(232,65,66,0.35)",
+              }}
+            >
+              Switch to {chainMetadata.name}
+            </button>
+          ) : (
+            <button
+              onClick={handleClaim}
+              disabled={isPending}
+              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
+              style={{
+                backgroundColor: "#00D084",
+                color: "#0B0E14",
+                boxShadow: "0 0 24px rgba(0,208,132,0.35)",
+              }}
+            >
+              {isPending ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" />
+                  {getStepLabel(pendingStep!)}
+                </>
+              ) : (
+                <>
+                  <Gift size={16} strokeWidth={2.2} />
+                  Claim Winnings
+                </>
+              )}
+            </button>
+          )}
         </div>
       )}
 
