@@ -4,6 +4,8 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
-    "@predict-me/types": "workspace:*"
+    "@predict-me/types": "workspace:*",
+    "@stellar/stellar-sdk": "^16.2.0",
+    "viem": "^2.23.0"
   }
 }
