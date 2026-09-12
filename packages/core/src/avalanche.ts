@@ -183,8 +183,23 @@ export class AvalancheMarketClient implements PredictionMarketClient {
       chain: this.walletClient.chain,
     });
 
-    await this.publicClient.waitForTransactionReceipt({ hash: txHash });
-    return { txHash };
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    let payoutAmount = 0;
+    try {
+      const logs = parseEventLogs({
+        abi: PredictionMarketAbi,
+        logs: receipt.logs,
+        eventName: "WinningsClaimed",
+      });
+      if (logs.length > 0 && (logs[0] as any).args?.payout !== undefined) {
+        payoutAmount = Number(formatEther((logs[0] as any).args.payout));
+      }
+    } catch {
+      // Non-critical if log parsing fails
+    }
+
+    return { txHash, data: payoutAmount };
   }
 
   async getMarket(marketId: string): Promise<Market | null> {

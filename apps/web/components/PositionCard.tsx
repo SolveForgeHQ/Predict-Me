@@ -12,11 +12,12 @@ interface Props {
   market: Market;
 }
 
-type PendingStep = "simulating" | "signing" | "confirming";
+type PendingStep = "simulating" | "signing" | "submitting" | "confirming";
 
 const STEP_LABEL: Record<PendingStep, string> = {
   simulating: "Simulating claim…",
   signing: "Waiting for wallet signature…",
+  submitting: "Broadcasting transaction…",
   confirming: "Confirming on ledger…",
 };
 
@@ -27,15 +28,24 @@ export default function PositionCard({ market }: Props) {
   const [yesShares, setYesShares] = useState<number>(0);
   const [noShares, setNoShares] = useState<number>(0);
   const [isLoadingPosition, setIsLoadingPosition] = useState(false);
+  const [onChainMarket, setOnChainMarket] = useState<{ status: string; outcome?: string } | null>(null);
 
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [txHash, setTxHash] = useState("");
 
   const isPending = pendingStep !== null;
-  const isResolved = market.status === "resolved_yes" || market.status === "resolved_no";
-  const winningSide =
-    market.status === "resolved_yes"
+
+  // Market is considered resolved if either static data or on-chain contract reports resolved
+  const isResolved =
+    market.status === "resolved_yes" ||
+    market.status === "resolved_no" ||
+    onChainMarket?.status === "resolved";
+
+  const winningSide: "YES" | "NO" | null =
+    onChainMarket?.status === "resolved" && onChainMarket.outcome
+      ? (onChainMarket.outcome.toUpperCase() as "YES" | "NO")
+      : market.status === "resolved_yes"
       ? "YES"
       : market.status === "resolved_no"
       ? "NO"
@@ -51,6 +61,8 @@ export default function PositionCard({ market }: Props) {
         return `Simulating claim on ${chainMetadata.name}…`;
       case "signing":
         return "Waiting for wallet signature…";
+      case "submitting":
+        return `Broadcasting claim to ${chainMetadata.name}…`;
       case "confirming":
         return chain === "avalanche"
           ? "Waiting for block confirmation on Avalanche…"
@@ -58,8 +70,8 @@ export default function PositionCard({ market }: Props) {
     }
   };
 
-  // ── Load live position from contract via the active chain client ───
-  const loadPosition = useCallback(async () => {
+  // ── Load live position & market state from contract via the active chain client ───
+  const loadPositionAndMarket = useCallback(async () => {
     if (!connected || !publicKey) {
       setYesShares(0);
       setNoShares(0);
@@ -68,10 +80,21 @@ export default function PositionCard({ market }: Props) {
 
     setIsLoadingPosition(true);
     try {
-      const pos = await client.getPosition(market.id, publicKey);
+      const [pos, mkt] = await Promise.all([
+        client.getPosition(market.id, publicKey),
+        client.getMarket(market.id).catch(() => null),
+      ]);
+
       if (pos) {
         setYesShares(pos.yesShares);
         setNoShares(pos.noShares);
+      }
+
+      if (mkt) {
+        setOnChainMarket({
+          status: mkt.status,
+          outcome: mkt.resolvedOutcome,
+        });
       }
     } catch (err) {
       console.warn("Failed to load position:", err);
@@ -81,8 +104,8 @@ export default function PositionCard({ market }: Props) {
   }, [connected, publicKey, market.id, client]);
 
   useEffect(() => {
-    loadPosition();
-  }, [loadPosition]);
+    loadPositionAndMarket();
+  }, [loadPositionAndMarket]);
 
   // ── Claim winnings via the active chain client ─────────────────────
   const handleClaim = async () => {
@@ -95,27 +118,34 @@ export default function PositionCard({ market }: Props) {
     try {
       await new Promise((r) => setTimeout(r, 0));
 
+      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
+      const submittingTimer = setTimeout(() => setPendingStep("submitting"), 1200);
+      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2500);
+
       const callPromise = client.claimWinnings({
         marketId: market.id,
         callerAddress: publicKey,
       });
 
-      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
-      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
-
       const result = await callPromise;
 
       clearTimeout(signingTimer);
+      clearTimeout(submittingTimer);
       clearTimeout(confirmingTimer);
 
       setTxHash(result.txHash);
+      const payoutText =
+        result.data && result.data > 0
+          ? `${result.data} ${chainMetadata.currency}`
+          : `${winningShares} winning ${winningSide} shares`;
+
       toast.success(
         "Winnings Claimed!",
-        `Claimed ${winningShares} winning ${winningSide} shares on ${chainMetadata.name}.`
+        `Successfully claimed ${payoutText} on ${chainMetadata.name}.`
       );
 
       // Refresh on-chain balance after claim
-      await loadPosition();
+      await loadPositionAndMarket();
     } catch (err) {
       let message = "Failed to claim winnings.";
       if (err instanceof Error) {
@@ -133,12 +163,17 @@ export default function PositionCard({ market }: Props) {
           message = "You have no winning shares to claim in this market.";
         } else if (raw.includes("TransferFailed")) {
           message = "Payout transfer failed on-chain.";
+        } else if (raw.includes("not configured")) {
+          message = raw;
+        } else if (raw.includes("WalletClient is required")) {
+          message = `Please connect your ${chainMetadata.shortName} wallet to claim winnings.`;
         } else {
           message = raw;
         }
       }
       setErrorMsg(message);
       toast.error("Claim Failed", message);
+      console.error("[PositionCard] claimWinnings error:", err);
     } finally {
       setPendingStep(null);
     }
@@ -159,7 +194,7 @@ export default function PositionCard({ market }: Props) {
           </h2>
           {connected && (
             <button
-              onClick={loadPosition}
+              onClick={loadPositionAndMarket}
               disabled={isLoadingPosition}
               title="Refresh on-chain position"
               className="text-[#8B93A7] hover:text-[#F2F4F7] transition-colors p-1"

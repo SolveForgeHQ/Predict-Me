@@ -209,27 +209,32 @@ export default function AdminPage() {
     try {
       await new Promise((r) => setTimeout(r, 0));
 
+      const signingTimer = setTimeout(() => {
+        setResolvingState((prev) => prev ? { ...prev, step: "signing" } : null);
+      }, 300);
+
+      const submittingTimer = setTimeout(() => {
+        setResolvingState((prev) => prev ? { ...prev, step: "submitting" } : null);
+      }, 1200);
+
+      const confirmingTimer = setTimeout(() => {
+        setResolvingState((prev) => prev ? { ...prev, step: "confirming" } : null);
+      }, 2500);
+
       const callPromise = client.resolveMarket({
         marketId,
         outcome: outcome.toLowerCase() as "yes" | "no",
         callerAddress: publicKey ?? undefined,
       });
 
-      const signingTimer = setTimeout(() => {
-        setResolvingState((prev) => prev ? { ...prev, step: "signing" } : null);
-      }, 300);
-
-      const confirmingTimer = setTimeout(() => {
-        setResolvingState((prev) => prev ? { ...prev, step: "confirming" } : null);
-      }, 2000);
-
       const result = await callPromise;
 
       clearTimeout(signingTimer);
+      clearTimeout(submittingTimer);
       clearTimeout(confirmingTimer);
 
       setResolveSuccess({ marketId, txHash: result.txHash, outcome });
-      toast.success("Market Resolved!", `Market resolved ${outcome} on-chain.`);
+      toast.success("Market Resolved!", `Market resolved ${outcome} on ${chainMetadata.name}.`);
 
       // Update market status in UI once confirmed on-chain
       const newStatus = outcome === "YES" ? "resolved_yes" : "resolved_no";
@@ -237,9 +242,36 @@ export default function AdminPage() {
         prev.map((m) => (m.id === marketId ? { ...m, status: newStatus } : m))
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to resolve market.";
+      let message = "Failed to resolve market.";
+      if (err instanceof Error) {
+        const raw = err.message;
+        if (
+          raw.includes("User rejected") ||
+          raw.includes("User denied") ||
+          raw.includes("rejected in your wallet") ||
+          raw.includes("rejected in wallet")
+        ) {
+          message = "Resolution transaction was cancelled in your wallet.";
+        } else if (
+          raw.includes("OwnableUnauthorizedAccount") ||
+          raw.includes("caller is not the owner")
+        ) {
+          message = "Access restricted: Only the contract owner can resolve markets on Avalanche.";
+        } else if (raw.includes("MarketNotFound")) {
+          message = "Market does not exist on the smart contract.";
+        } else if (raw.includes("MarketNotOpen")) {
+          message = "This market is not open or has already been resolved.";
+        } else if (raw.includes("not configured")) {
+          message = raw;
+        } else if (raw.includes("WalletClient is required")) {
+          message = `Please connect your ${chainMetadata.shortName} owner wallet to resolve markets.`;
+        } else {
+          message = raw;
+        }
+      }
       setResolveError({ marketId, message });
       toast.error("Resolution Failed", message);
+      console.error("[admin] resolveMarket error:", err);
     } finally {
       setResolvingState(null);
     }
@@ -602,6 +634,8 @@ export default function AdminPage() {
                             <Loader2 size={12} className="animate-spin" />
                             {resolvingState.step === "signing"
                               ? "Sign…"
+                              : resolvingState.step === "submitting"
+                              ? "Broadcasting…"
                               : resolvingState.step === "confirming"
                               ? "Confirming…"
                               : "Simulating…"}
@@ -625,6 +659,8 @@ export default function AdminPage() {
                             <Loader2 size={12} className="animate-spin" />
                             {resolvingState.step === "signing"
                               ? "Sign…"
+                              : resolvingState.step === "submitting"
+                              ? "Broadcasting…"
                               : resolvingState.step === "confirming"
                               ? "Confirming…"
                               : "Simulating…"}
