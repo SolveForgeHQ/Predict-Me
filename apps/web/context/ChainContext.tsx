@@ -16,6 +16,7 @@ import {
 } from "@predict-me/core";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 import { avalancheFuji } from "viem/chains";
+import { useWalletClient } from "wagmi";
 import { signTransaction, STELLAR_NETWORK_PASSPHRASE } from "@/lib/wallet";
 
 export type ChainId = "avalanche" | "stellar";
@@ -66,6 +67,7 @@ const ChainContext = createContext<ChainContextValue | null>(null);
 export function ChainProvider({ children }: { children: ReactNode }) {
   const [chain, setChainState] = useState<ChainId>("stellar");
   const [mounted, setMounted] = useState(false);
+  const { data: wagmiWalletClient } = useWalletClient();
 
   // Restore chain selection from localStorage on mount
   useEffect(() => {
@@ -107,8 +109,8 @@ export function ChainProvider({ children }: { children: ReactNode }) {
         transport: http(rpcUrl),
       });
 
-      let walletClient: any = undefined;
-      if (typeof window !== "undefined" && (window as any).ethereum) {
+      let walletClient: any = wagmiWalletClient;
+      if (!walletClient && typeof window !== "undefined" && (window as any).ethereum) {
         walletClient = createWalletClient({
           chain: avalancheFuji,
           transport: custom((window as any).ethereum),
@@ -136,7 +138,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
         return signTransaction(xdrString);
       },
     });
-  }, [chain]);
+  }, [chain, wagmiWalletClient]);
 
   const chainMetadata = CHAIN_METADATA[chain];
 

@@ -4,16 +4,30 @@ import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
-import { LogOut, Copy, Check, Loader2 } from "lucide-react";
+import { LogOut, Copy, Check, Loader2, ExternalLink } from "lucide-react";
 import ChainSwitcher from "@/components/ChainSwitcher";
+import { useChain } from "@/context/ChainContext";
+import { useAccountModal } from "@rainbow-me/rainbowkit";
+
+function formatAddress(address: string): string {
+  if (address.startsWith("0x")) {
+    if (address.length <= 10) return address;
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  }
+  return truncateAddress(address);
+}
 
 export default function TopBar() {
   const { publicKey, connected, connecting, error, connect, disconnect, clearError } =
     useWallet();
+  const { chain, chainMetadata } = useChain();
+  const { openAccountModal } = useAccountModal();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const isAvalanche = chain === "avalanche";
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -70,16 +84,19 @@ export default function TopBar() {
                 onClick={() => setDropdownOpen((o) => !o)}
                 className="text-sm font-semibold px-3 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-2"
                 style={{
-                  borderColor: "#00D08455",
-                  color: "#00D084",
-                  backgroundColor: "#00D08415",
+                  borderColor: chainMetadata.borderColor,
+                  color: chainMetadata.color,
+                  backgroundColor: chainMetadata.badgeBg,
                 }}
               >
                 <span
                   className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: "#00D084", boxShadow: "0 0 6px #00D084" }}
+                  style={{
+                    backgroundColor: chainMetadata.color,
+                    boxShadow: `0 0 6px ${chainMetadata.color}`,
+                  }}
                 />
-                {truncateAddress(publicKey)}
+                {formatAddress(publicKey)}
               </button>
             ) : (
               // Not connected
@@ -88,16 +105,16 @@ export default function TopBar() {
                 disabled={connecting}
                 className="text-sm font-semibold px-4 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-2"
                 style={{
-                  borderColor: "#00D084",
-                  color: "#00D084",
+                  borderColor: chainMetadata.color,
+                  color: chainMetadata.color,
                   backgroundColor: "transparent",
                   opacity: connecting ? 0.7 : 1,
                 }}
                 onMouseEnter={(e) => {
                   if (connecting) return;
                   const b = e.currentTarget;
-                  b.style.backgroundColor = "#00D08422";
-                  b.style.boxShadow = "0 0 16px #00D08450";
+                  b.style.backgroundColor = `${chainMetadata.color}22`;
+                  b.style.boxShadow = `0 0 16px ${chainMetadata.color}50`;
                 }}
                 onMouseLeave={(e) => {
                   const b = e.currentTarget;
@@ -118,18 +135,26 @@ export default function TopBar() {
                   backgroundColor: "#161B26",
                   border: "1px solid #1E2435",
                   boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-                  minWidth: "200px",
+                  minWidth: "220px",
                 }}
               >
                 {/* Full address (read-only) */}
                 <div className="px-4 py-2.5" style={{ borderBottom: "1px solid #1E2435" }}>
-                  <p className="text-xs mb-0.5" style={{ color: "#8B93A7" }}>Connected as</p>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs font-medium" style={{ color: "#8B93A7" }}>
+                      Connected on {chainMetadata.shortName}
+                    </p>
+                    <span
+                      className="w-1.5 h-1.5 rounded-full"
+                      style={{ backgroundColor: chainMetadata.color }}
+                    />
+                  </div>
                   <p className="text-xs font-mono break-all" style={{ color: "#F2F4F7" }}>
-                    {truncateAddress(publicKey)}
+                    {formatAddress(publicKey)}
                   </p>
                 </div>
 
-                {/* Copy */}
+                {/* Copy address */}
                 <button
                   onClick={handleCopy}
                   className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left"
@@ -137,9 +162,26 @@ export default function TopBar() {
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
                 >
-                  {copied ? <Check size={14} color="#00D084" /> : <Copy size={14} />}
+                  {copied ? <Check size={14} color={chainMetadata.color} /> : <Copy size={14} />}
                   {copied ? "Copied!" : "Copy address"}
                 </button>
+
+                {/* RainbowKit Account Details Modal (Avalanche only) */}
+                {isAvalanche && openAccountModal && (
+                  <button
+                    onClick={() => {
+                      setDropdownOpen(false);
+                      openAccountModal();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left"
+                    style={{ color: "#F2F4F7" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                  >
+                    <ExternalLink size={14} />
+                    Wallet details
+                  </button>
+                )}
 
                 {/* Disconnect */}
                 <button

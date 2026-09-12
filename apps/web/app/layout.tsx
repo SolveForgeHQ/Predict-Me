@@ -7,6 +7,8 @@ import { WalletProvider } from "@/context/WalletContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { ChainProvider } from "@/context/ChainContext";
 
+import RainbowWeb3Provider from "@/providers/RainbowWeb3Provider";
+
 const geist = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -28,16 +30,18 @@ export default function RootLayout({
         className="min-h-full flex flex-col antialiased"
         style={{ backgroundColor: "#0B0E14", color: "#F2F4F7" }}
       >
-        <ChainProvider>
-          <WalletProvider>
-            <ToastProvider>
-              <TopBar />
-              {/* pb-20 reserves space so content never hides behind the floating bottom nav */}
-              <main className="flex-1 pb-20">{children}</main>
-              <BottomNav />
-            </ToastProvider>
-          </WalletProvider>
-        </ChainProvider>
+        <RainbowWeb3Provider>
+          <ChainProvider>
+            <WalletProvider>
+              <ToastProvider>
+                <TopBar />
+                {/* pb-20 reserves space so content never hides behind the floating bottom nav */}
+                <main className="flex-1 pb-20">{children}</main>
+                <BottomNav />
+              </ToastProvider>
+            </WalletProvider>
+          </ChainProvider>
+        </RainbowWeb3Provider>
       </body>
     </html>
   );

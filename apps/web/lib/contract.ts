@@ -21,7 +21,7 @@ import {
   Account,
 } from "@stellar/stellar-sdk";
 import { signTransaction, STELLAR_NETWORK_PASSPHRASE } from "@/lib/wallet";
-import type { Market, Position } from "@/lib/types";
+import type { Market, Position, MarketStatus } from "@/lib/types";
 
 // ── Config ───────────────────────────────────────────────────
 
@@ -80,7 +80,7 @@ async function invokeContract(
 
   // Load the caller's current sequence number from the network
   const accountData = await server.getAccount(callerPublicKey);
-  const account = new Account(callerPublicKey, accountData.sequence);
+  const account = new Account(callerPublicKey, (accountData as any).sequence);
 
   // Build the transaction
   const tx = new TransactionBuilder(account, {
@@ -210,7 +210,7 @@ export async function fetchMarkets(): Promise<Market[] | null> {
       const entry = await server.getContractData(
         contract.address(),
         countKey,
-        rpc.Durability.Instance
+        (rpc.Durability as any).Instance ?? (rpc.Durability as any).Temporary
       );
       if (entry && entry.val) {
         const val = scValToNative(entry.val.contractData().val());

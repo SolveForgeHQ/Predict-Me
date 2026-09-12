@@ -1,12 +1,9 @@
 "use client";
 
 // WalletContext.tsx
-// Global wallet state for predict-me.
-// Wraps the app so any component can read publicKey and call connect/disconnect.
-//
-// On mount: attempts silent session restore via Freighter
-// On connect: calls connectWallet(), stores address, surfaces errors
-// On disconnect: calls disconnectWallet(), clears address
+// Unified wallet state for predict-me supporting dual chains:
+// - Stellar: Freighter & multi-wallet via @creit.tech/stellar-wallets-kit
+// - Avalanche: RainbowKit / Wagmi connectors (MetaMask, Coinbase, WalletConnect, etc.)
 
 import {
   createContext,
@@ -17,15 +14,18 @@ import {
   type ReactNode,
 } from "react";
 import {
-  connectWallet,
-  disconnectWallet,
-  restoreSession,
+  connectWallet as connectStellarWallet,
+  disconnectWallet as disconnectStellarWallet,
+  restoreSession as restoreStellarSession,
   initKit,
   WalletError,
   type WalletErrorCode,
 } from "@/lib/wallet";
 import { loginWithWallet } from "@/lib/auth";
 import { clearSessionToken } from "@/lib/api";
+import { useChain } from "@/context/ChainContext";
+import { useAccount, useDisconnect } from "wagmi";
+import { useConnectModal } from "@rainbow-me/rainbowkit";
 
 // ── Context shape ────────────────────────────────────────────
 
@@ -38,6 +38,9 @@ interface WalletContextValue {
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   clearError: () => void;
+  // Specific chain addresses
+  stellarPublicKey: string | null;
+  evmAddress: string | null;
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -45,59 +48,112 @@ const WalletContext = createContext<WalletContextValue | null>(null);
 // ── Provider ─────────────────────────────────────────────────
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [publicKey, setPublicKey] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [error, setError] = useState<WalletContextValue["error"]>(null);
-  // true while we're attempting silent session restore on mount
-  const [restoring, setRestoring] = useState(true);
+  const { chain } = useChain();
 
-  // Silent session restore on first load
+  // ── Stellar State ──
+  const [stellarPublicKey, setStellarPublicKey] = useState<string | null>(null);
+  const [stellarConnecting, setStellarConnecting] = useState(false);
+  const [stellarError, setStellarError] = useState<WalletContextValue["error"]>(null);
+  const [restoringStellar, setRestoringStellar] = useState(true);
+
+  // ── Avalanche / EVM State (Wagmi + RainbowKit) ──
+  const { address: evmAddress, isConnected: isEvmConnected, isConnecting: isEvmConnecting } = useAccount();
+  const { disconnectAsync: disconnectEvm } = useDisconnect();
+  const { openConnectModal } = useConnectModal();
+
+  // Silent session restore on first load for Stellar
   useEffect(() => {
     initKit();
-    restoreSession()
+    restoreStellarSession()
       .then((addr) => {
-        if (addr) setPublicKey(addr);
+        if (addr) setStellarPublicKey(addr);
       })
       .catch(() => {
         // Silently ignore restore failures
       })
-      .finally(() => setRestoring(false));
+      .finally(() => setRestoringStellar(false));
   }, []);
 
-  const connect = useCallback(async () => {
-    setError(null);
-    setConnecting(true);
+  const connectStellar = useCallback(async () => {
+    setStellarError(null);
+    setStellarConnecting(true);
     try {
-      const addr = await connectWallet();
+      const addr = await connectStellarWallet();
       // Authenticate with the backend: sign a message and exchange for a JWT
       await loginWithWallet(addr);
-      setPublicKey(addr);
+      setStellarPublicKey(addr);
     } catch (err) {
       if (err instanceof WalletError) {
-        setError({ code: err.code, message: err.message });
+        setStellarError({ code: err.code, message: err.message });
       } else {
-        setError({ code: "UNKNOWN", message: "Unexpected error connecting wallet." });
+        setStellarError({ code: "UNKNOWN", message: "Unexpected error connecting wallet." });
       }
     } finally {
-      setConnecting(false);
+      setStellarConnecting(false);
     }
   }, []);
 
-  const disconnect = useCallback(async () => {
-    await disconnectWallet();
+  const disconnectStellar = useCallback(async () => {
+    await disconnectStellarWallet();
     clearSessionToken();
-    setPublicKey(null);
-    setError(null);
+    setStellarPublicKey(null);
+    setStellarError(null);
   }, []);
 
-  const clearError = useCallback(() => setError(null), []);
+  const clearError = useCallback(() => setStellarError(null), []);
+
+  // ── Chain-Aware Dispatch ──
+  const isAvalanche = chain === "avalanche";
+
+  const publicKey = isAvalanche
+    ? (evmAddress ?? null)
+    : stellarPublicKey;
+
+  const connected = isAvalanche
+    ? Boolean(isEvmConnected && evmAddress)
+    : Boolean(stellarPublicKey);
+
+  const connecting = isAvalanche
+    ? isEvmConnecting
+    : stellarConnecting;
+
+  const connect = useCallback(async () => {
+    if (isAvalanche) {
+      if (openConnectModal) {
+        openConnectModal();
+      }
+    } else {
+      await connectStellar();
+    }
+  }, [isAvalanche, openConnectModal, connectStellar]);
+
+  const disconnect = useCallback(async () => {
+    if (isAvalanche) {
+      try {
+        await disconnectEvm();
+      } catch (err) {
+        console.warn("EVM disconnect error:", err);
+      }
+    } else {
+      await disconnectStellar();
+    }
+  }, [isAvalanche, disconnectEvm, disconnectStellar]);
 
   // Don't render children until we've attempted session restore
-  // (avoids flash of "Connect Wallet" for already-connected users)
-  if (restoring) {
+  if (restoringStellar) {
     return (
       <WalletContext.Provider
-        value={{ publicKey: null, connected: false, connecting: false, error: null, connect, disconnect, clearError }}
+        value={{
+          publicKey: null,
+          connected: false,
+          connecting: false,
+          error: null,
+          connect,
+          disconnect,
+          clearError,
+          stellarPublicKey: null,
+          evmAddress: null,
+        }}
       >
         {children}
       </WalletContext.Provider>
@@ -108,12 +164,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     <WalletContext.Provider
       value={{
         publicKey,
-        connected: publicKey !== null,
+        connected,
         connecting,
-        error,
+        error: isAvalanche ? null : stellarError,
         connect,
         disconnect,
         clearError,
+        stellarPublicKey,
+        evmAddress: evmAddress ?? null,
       }}
     >
       {children}

@@ -63,7 +63,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     }
 
     const accountData = await this.server.getAccount(callerPublicKey);
-    const account = new Account(callerPublicKey, accountData.sequence);
+    const account = new Account(callerPublicKey, (accountData as any).sequence);
 
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
@@ -135,7 +135,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     // 1 XLM = 10^7 stroops
     const amountStroops = BigInt(Math.round(params.amount * 10_000_000));
 
-    if (amountStroops <= 0n) {
+    if (amountStroops <= BigInt(0)) {
       throw new Error("Amount must be greater than 0 XLM.");
     }
 

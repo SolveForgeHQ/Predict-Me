@@ -81,7 +81,7 @@ export class AvalancheMarketClient implements PredictionMarketClient {
     const isYes = params.outcome.toLowerCase() === "yes";
     const valueWei = parseEther(params.amount.toString());
 
-    if (valueWei <= 0n) {
+    if (valueWei <= BigInt(0)) {
       throw new Error("Amount must be greater than 0 AVAX.");
     }
 
