@@ -4,6 +4,7 @@ out = "out"
 test = "test"
 script = "script"
 libs = ["lib", "../../stellar/contracts/lib"]
+via_ir = true
 remappings = [
     "@openzeppelin/contracts/=../../stellar/contracts/lib/openzeppelin-contracts/contracts/",
     "forge-std/=../../stellar/contracts/lib/forge-std/src/"
