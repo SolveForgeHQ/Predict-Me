@@ -20,7 +20,8 @@ contract DeployPredictionMarket is Script {
     function run() external returns (PredictionMarket) {
         // Read private key from environment variables (supports PRIVATE_KEY or DEPLOYER_PRIVATE_KEY)
         uint256 deployerPrivateKey;
-        if (vm.envOr("PRIVATE_KEY", uint256(0)) != 0) {
+        bytes memory pkBytes = vm.envOr("PRIVATE_KEY", bytes(""));
+        if (pkBytes.length > 0) {
             deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         } else {
             deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
