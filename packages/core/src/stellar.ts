@@ -36,7 +36,7 @@ export class StellarMarketClient implements PredictionMarketClient {
   private readonly signTransactionFn?: (xdrString: string) => Promise<string>;
   private readonly defaultCallerPublicKey?: string;
   private readonly server: rpc.Server;
-  private readonly contract: Contract;
+  private readonly contract?: Contract;
 
   constructor(config: StellarMarketClientConfig) {
     this.contractId = config.contractId;
@@ -47,7 +47,13 @@ export class StellarMarketClient implements PredictionMarketClient {
     this.server = new rpc.Server(this.rpcUrl, {
       allowHttp: this.rpcUrl.startsWith("http://"),
     });
-    this.contract = new Contract(this.contractId);
+    if (this.contractId) {
+      try {
+        this.contract = new Contract(this.contractId);
+      } catch {
+        // May fail during SSR / build time if contractId is not yet configured
+      }
+    }
   }
 
   private async invokeContract(
@@ -55,7 +61,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     method: string,
     args: xdr.ScVal[]
   ): Promise<string> {
-    if (!this.contractId || !this.rpcUrl) {
+    if (!this.contract || !this.contractId || !this.rpcUrl) {
       throw new Error("Contract ID or RPC URL is not configured for StellarMarketClient.");
     }
     if (!this.signTransactionFn) {
@@ -185,6 +191,7 @@ export class StellarMarketClient implements PredictionMarketClient {
   }
 
   async getMarket(marketId: string): Promise<Market | null> {
+    if (!this.contract) return null;
     try {
       const marketIdNum = parseInt(marketId, 10);
       const marketKey = xdr.ScVal.scvVec([
@@ -230,6 +237,8 @@ export class StellarMarketClient implements PredictionMarketClient {
   }
 
   async getPosition(marketId: string, userAddress: string): Promise<Position | null> {
+    if (!this.contract) return null;
+    const contract = this.contract;
     try {
       const marketIdNum = parseInt(marketId, 10);
 
@@ -243,7 +252,7 @@ export class StellarMarketClient implements PredictionMarketClient {
           ]);
 
           const entry = await this.server.getContractData(
-            this.contract.address(),
+            contract.address(),
             keyVal,
             rpc.Durability.Persistent
           );

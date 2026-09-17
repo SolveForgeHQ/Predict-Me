@@ -6,6 +6,13 @@ import {
   RainbowKitProvider,
   darkTheme,
 } from "@rainbow-me/rainbowkit";
+import {
+  coreWallet,
+  metaMaskWallet,
+  rainbowWallet,
+  coinbaseWallet,
+  walletConnectWallet,
+} from "@rainbow-me/rainbowkit/wallets";
 import { WagmiProvider } from "wagmi";
 import { avalancheFuji, avalanche } from "wagmi/chains";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -18,6 +25,16 @@ export const wagmiConfig = getDefaultConfig({
     "3fbb6bba6f1de962d911bb5b5c9dba88",
   chains: [avalancheFuji, avalanche],
   ssr: true,
+  wallets: [
+    {
+      groupName: "Recommended for Avalanche",
+      wallets: [coreWallet, metaMaskWallet],
+    },
+    {
+      groupName: "Other Wallets",
+      wallets: [rainbowWallet, coinbaseWallet, walletConnectWallet],
+    },
+  ],
 });
 
 export default function RainbowWeb3Provider({
