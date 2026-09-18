@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
-import { LogOut, Copy, Check, Loader2, ExternalLink } from "lucide-react";
+import { LogOut, Copy, Check, Loader2, ExternalLink, Shield } from "lucide-react";
 import ChainSwitcher from "@/components/ChainSwitcher";
 import { useChain } from "@/context/ChainContext";
 import { useAccountModal } from "@rainbow-me/rainbowkit";
@@ -29,14 +29,46 @@ export default function TopBar() {
     disconnect,
     clearError,
   } = useWallet();
-  const { chain, chainMetadata } = useChain();
+  const { chain, chainMetadata, client } = useChain();
   const { openAccountModal } = useAccountModal();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isAvalanche = chain === "avalanche";
+
+  // Check if connected address is admin/owner
+  useEffect(() => {
+    if (!connected || !publicKey) {
+      setIsAdmin(false);
+      return;
+    }
+
+    const envAdmin = isAvalanche
+      ? (process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ?? process.env.NEXT_PUBLIC_ADMIN_ADDRESS)
+      : (process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ?? process.env.NEXT_PUBLIC_ADMIN_ADDRESS ?? "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
+
+    if (envAdmin && publicKey.toLowerCase() === envAdmin.toLowerCase()) {
+      setIsAdmin(true);
+      return;
+    }
+
+    if (isAvalanche && client.getOwner) {
+      client.getOwner()
+        .then((owner: string | null) => {
+          if (owner && publicKey.toLowerCase() === owner.toLowerCase()) {
+            setIsAdmin(true);
+          } else {
+            setIsAdmin(false);
+          }
+        })
+        .catch(() => setIsAdmin(false));
+    } else {
+      setIsAdmin(false);
+    }
+  }, [connected, publicKey, isAvalanche, client]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -81,8 +113,32 @@ export default function TopBar() {
             </span>
           </Link>
 
-          {/* Controls: Chain Switcher & Wallet */}
-          <div className="flex items-center gap-2.5">
+          {/* Controls: Admin shortcut (admin only), Chain Switcher & Wallet */}
+          <div className="flex items-center gap-2">
+            {connected && isAdmin && (
+              <Link
+                href="/admin"
+                title="Admin Panel"
+                className="text-xs font-semibold px-2.5 py-1.5 rounded-full border transition-all flex items-center gap-1.5"
+                style={{
+                  borderColor: "rgba(255,255,255,0.12)",
+                  color: "#8B93A7",
+                  backgroundColor: "rgba(255,255,255,0.03)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#F2F4F7";
+                  e.currentTarget.style.borderColor = "rgba(255,255,255,0.25)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#8B93A7";
+                  e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)";
+                }}
+              >
+                <Shield size={12} color="#00D084" />
+                <span className="hidden sm:inline">Admin</span>
+              </Link>
+            )}
+
             <ChainSwitcher />
 
             {/* Wallet button area */}
@@ -208,6 +264,21 @@ export default function TopBar() {
                     <ExternalLink size={14} />
                     Wallet details
                   </button>
+                )}
+
+                {/* Admin Panel (admin only) */}
+                {isAdmin && (
+                  <Link
+                    href="/admin"
+                    onClick={() => setDropdownOpen(false)}
+                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left"
+                    style={{ color: "#F2F4F7" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                  >
+                    <Shield size={14} color="#00D084" />
+                    Admin Panel
+                  </Link>
                 )}
 
                 {/* Disconnect */}

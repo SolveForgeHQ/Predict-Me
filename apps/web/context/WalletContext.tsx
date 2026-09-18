@@ -61,10 +61,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [restoringStellar, setRestoringStellar] = useState(true);
 
   // ── Avalanche / EVM State (Wagmi + RainbowKit) ──
-  const { address: evmAddress, isConnected: isEvmConnected, isConnecting: isEvmConnecting, chainId } = useAccount();
+  const { address: evmAddress, isConnected: isEvmConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const { disconnectAsync: disconnectEvm } = useDisconnect();
   const { openConnectModal } = useConnectModal();
+
+  // Track whether the USER explicitly clicked "Connect Wallet".
+  // We do NOT use wagmi's isConnecting/isReconnecting because those also fire
+  // on page load (background session restore) and whenever the chain selector
+  // switches to Avalanche — causing the button to spin with no user action.
+  const [userInitiatedEvmConnect, setUserInitiatedEvmConnect] = useState(false);
+
+  // Clear the flag once wagmi reports a definitive outcome (connected or idle),
+  // or after 30s as a safety net in case the user dismisses the connect modal.
+  useEffect(() => {
+    if (isEvmConnected) {
+      setUserInitiatedEvmConnect(false);
+      return;
+    }
+    if (!userInitiatedEvmConnect) return;
+    const timer = setTimeout(() => setUserInitiatedEvmConnect(false), 30_000);
+    return () => clearTimeout(timer);
+  }, [isEvmConnected, userInitiatedEvmConnect]);
 
   // Silent session restore on first load for Stellar
   useEffect(() => {
@@ -136,13 +154,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     ? Boolean(isEvmConnected && evmAddress)
     : Boolean(stellarPublicKey);
 
+  // Spinner only shows when the user explicitly opened the connect modal.
   const connecting = isAvalanche
-    ? isEvmConnecting
+    ? userInitiatedEvmConnect
     : stellarConnecting;
 
   const connect = useCallback(async () => {
     if (isAvalanche) {
       if (openConnectModal) {
+        setUserInitiatedEvmConnect(true);
         openConnectModal();
       }
     } else {
