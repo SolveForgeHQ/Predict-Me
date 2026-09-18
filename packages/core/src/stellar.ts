@@ -35,7 +35,7 @@ export class StellarMarketClient implements PredictionMarketClient {
   private readonly networkPassphrase: string;
   private readonly signTransactionFn?: (xdrString: string) => Promise<string>;
   private readonly defaultCallerPublicKey?: string;
-  private readonly server: rpc.Server;
+  private readonly server?: rpc.Server;
   private readonly contract?: Contract;
 
   constructor(config: StellarMarketClientConfig) {
@@ -44,9 +44,16 @@ export class StellarMarketClient implements PredictionMarketClient {
     this.networkPassphrase = config.networkPassphrase ?? Networks.TESTNET;
     this.signTransactionFn = config.signTransaction;
     this.defaultCallerPublicKey = config.defaultCallerPublicKey;
-    this.server = new rpc.Server(this.rpcUrl, {
-      allowHttp: this.rpcUrl.startsWith("http://"),
-    });
+    // Guard against empty rpcUrl during SSR / CI build when env vars are unset
+    if (this.rpcUrl) {
+      try {
+        this.server = new rpc.Server(this.rpcUrl, {
+          allowHttp: this.rpcUrl.startsWith("http://"),
+        });
+      } catch {
+        // Invalid URL — will be caught at runtime when methods are called
+      }
+    }
     if (this.contractId) {
       try {
         this.contract = new Contract(this.contractId);
@@ -61,7 +68,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     method: string,
     args: xdr.ScVal[]
   ): Promise<string> {
-    if (!this.contract || !this.contractId || !this.rpcUrl) {
+    if (!this.contract || !this.contractId || !this.rpcUrl || !this.server) {
       throw new Error("Contract ID or RPC URL is not configured for StellarMarketClient.");
     }
     if (!this.signTransactionFn) {
@@ -191,7 +198,7 @@ export class StellarMarketClient implements PredictionMarketClient {
   }
 
   async getMarket(marketId: string): Promise<Market | null> {
-    if (!this.contract) return null;
+    if (!this.contract || !this.server) return null;
     try {
       const marketIdNum = parseInt(marketId, 10);
       const marketKey = xdr.ScVal.scvVec([
@@ -237,8 +244,9 @@ export class StellarMarketClient implements PredictionMarketClient {
   }
 
   async getPosition(marketId: string, userAddress: string): Promise<Position | null> {
-    if (!this.contract) return null;
+    if (!this.contract || !this.server) return null;
     const contract = this.contract;
+    const server = this.server;
     try {
       const marketIdNum = parseInt(marketId, 10);
 
@@ -251,7 +259,7 @@ export class StellarMarketClient implements PredictionMarketClient {
             nativeToScVal(side, { type: "u32" }),
           ]);
 
-          const entry = await this.server.getContractData(
+          const entry = await server.getContractData(
             contract.address(),
             keyVal,
             rpc.Durability.Persistent
