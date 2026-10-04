@@ -4,48 +4,58 @@ Thanks for your interest in contributing. This document covers the workflow for 
 
 ## Project structure
 
+This repository is organized as a pnpm monorepo:
+
 ```
-prediction-market/
-├── frontend/   — Next.js app (TypeScript)
-└── contracts/  — Soroban smart contract (Rust)
+predict-me/
+├── apps/
+│   └── web/                 — Next.js frontend dApp
+├── backend/                 — Cloudflare Workers API (Hono + D1)
+├── blockchain/
+│   ├── stellar/contracts/   — Soroban smart contracts (Rust)
+│   └── avalanche/contracts/ — EVM smart contracts (Solidity)
+├── packages/
+│   ├── core/                — Shared Stellar & Avalanche client SDKs
+│   └── types/               — Shared TypeScript types
+└── docs/
+    ├── stellar.md           — Deployed Soroban testnet documentation
+    └── avalanche.md         — Avalanche Fuji contract documentation
 ```
 
 ## Getting started
 
 1. Fork and clone the repo
-2. Follow the setup steps in [README.md](README.md)
+2. Install dependencies at the monorepo root: `pnpm install`
 3. Create a feature branch: `git checkout -b feat/your-feature`
 
-## Frontend
+## Frontend (`apps/web`)
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev        # dev server at localhost:3000
-pnpm lint       # ESLint
-pnpm build      # verify production build before opening a PR
+pnpm --filter web dev       # dev server at localhost:3000
+pnpm --filter web lint      # ESLint
+pnpm --filter web build     # verify production build
 ```
 
-Key files to know:
-
-| File | Purpose |
-|---|---|
-| `lib/types.ts` | Shared TypeScript interfaces |
-| `lib/mockData.ts` | Static placeholder data |
-| `lib/contract.ts` | Soroban RPC call stubs |
-| `lib/wallet.ts` | Freighter wallet connection stubs |
-
-## Contracts
+## Contracts (`blockchain/stellar/contracts`)
 
 ```bash
-cd contracts
-make build      # compile to WASM
-make test       # build + cargo test
-make fmt        # rustfmt
-make lint       # clippy
+cd blockchain/stellar/contracts
+stellar contract build      # compile to WASM
+cargo test                  # run test suite
+make fmt                    # rustfmt
+make lint                   # clippy
 ```
 
-All contract logic lives in `src/`. Tests go in `tests/market_test.rs`.
+Deployed Soroban Testnet Contract ID: `CCGM6LQRQNQGMUXMXHICCH73CDBYOTMV5LEJ7JWWXUBXLRFZJCPAHHXI`
+
+## Contributing to Open Issues
+
+We actively welcome contributions! Check the GitHub Issues tab for scoped, prioritized tasks:
+- **AMM-based dynamic pricing** (bonding curves / LMSR)
+- **Portfolio / positions page**
+- **Dispute resolution flow**
+- **Multi-outcome market support**
+- **Decentralized oracle resolution research**
 
 ## Commit style
 
