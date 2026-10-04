@@ -95,6 +95,28 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     setChain(chain === "stellar" ? "avalanche" : "stellar");
   }, [chain, setChain]);
 
+  // Read the connected Stellar public key from localStorage (written by wallet.ts)
+  // so we can pass it as defaultCallerPublicKey to StellarMarketClient.
+  // We avoid importing WalletContext here (circular dep) by reading the key directly.
+  const STELLAR_PK_STORAGE_KEY = "predict-me:wallet";
+  const [stellarPublicKey, setStellarPublicKey] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(STELLAR_PK_STORAGE_KEY);
+  });
+
+  // Keep it in sync when wallet.ts writes or clears the address
+  useEffect(() => {
+    const handler = (e: StorageEvent) => {
+      if (e.key === STELLAR_PK_STORAGE_KEY) {
+        setStellarPublicKey(e.newValue);
+      }
+    };
+    window.addEventListener("storage", handler);
+    // Also poll once on mount in case the tab's own writes don't fire the storage event
+    setStellarPublicKey(localStorage.getItem(STELLAR_PK_STORAGE_KEY));
+    return () => window.removeEventListener("storage", handler);
+  }, []);
+
   // Instantiate the corresponding PredictionMarketClient implementation based on the active chain
   const client = useMemo<PredictionMarketClient>(() => {
     if (chain === "avalanche") {
@@ -134,11 +156,12 @@ export function ChainProvider({ children }: { children: ReactNode }) {
       contractId,
       rpcUrl,
       networkPassphrase: STELLAR_NETWORK_PASSPHRASE,
+      defaultCallerPublicKey: stellarPublicKey ?? undefined,
       signTransaction: async (xdrString: string) => {
         return signTransaction(xdrString);
       },
     });
-  }, [chain, wagmiWalletClient]);
+  }, [chain, wagmiWalletClient, stellarPublicKey]);
 
   const chainMetadata = CHAIN_METADATA[chain];
 

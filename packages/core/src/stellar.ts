@@ -67,7 +67,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     callerPublicKey: string,
     method: string,
     args: xdr.ScVal[]
-  ): Promise<string> {
+  ): Promise<{ hash: string; returnValue?: xdr.ScVal }> {
     if (!this.contract || !this.contractId || !this.rpcUrl || !this.server) {
       throw new Error("Contract ID or RPC URL is not configured for StellarMarketClient.");
     }
@@ -91,6 +91,11 @@ export class StellarMarketClient implements PredictionMarketClient {
       throw new Error(`Stellar contract simulation failed: ${simResult.error}`);
     }
 
+    // Capture the simulated return value (available before signing)
+    const simReturnValue = rpc.Api.isSimulationSuccess(simResult)
+      ? (simResult as any).result?.retval
+      : undefined;
+
     const preparedTx = rpc.assembleTransaction(tx, simResult).build();
     const signedXdr = await this.signTransactionFn(preparedTx.toXDR());
 
@@ -106,14 +111,16 @@ export class StellarMarketClient implements PredictionMarketClient {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const statusResult = await this.server.getTransaction(hash);
       if (statusResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        return hash;
+        // Try to get return value from the finalized transaction result
+        const finalRetVal = (statusResult as any).returnValue ?? simReturnValue;
+        return { hash, returnValue: finalRetVal };
       }
       if (statusResult.status === rpc.Api.GetTransactionStatus.FAILED) {
         throw new Error(`Transaction ${hash} failed during execution.`);
       }
     }
 
-    return hash;
+    return { hash, returnValue: simReturnValue };
   }
 
   async createMarket(params: CreateMarketParams): Promise<TransactionResult<string>> {
@@ -133,8 +140,16 @@ export class StellarMarketClient implements PredictionMarketClient {
       nativeToScVal(category, { type: "string" }),
     ];
 
-    const txHash = await this.invokeContract(caller, "create_market", args);
-    return { txHash };
+    const { hash, returnValue } = await this.invokeContract(caller, "create_market", args);
+    // Return value is the new market id (u32)
+    let marketId: string | undefined;
+    if (returnValue) {
+      try {
+        const raw = scValToNative(returnValue);
+        marketId = String(raw);
+      } catch { /* ignore */ }
+    }
+    return { txHash: hash, data: marketId };
   }
 
   async buyShares(params: BuySharesParams): Promise<TransactionResult<void>> {
@@ -159,8 +174,8 @@ export class StellarMarketClient implements PredictionMarketClient {
       nativeToScVal(caller, { type: "address" }),
     ];
 
-    const txHash = await this.invokeContract(caller, "buy_shares", args);
-    return { txHash };
+    const { hash } = await this.invokeContract(caller, "buy_shares", args);
+    return { txHash: hash };
   }
 
   async resolveMarket(params: ResolveMarketParams): Promise<TransactionResult<void>> {
@@ -177,8 +192,8 @@ export class StellarMarketClient implements PredictionMarketClient {
       nativeToScVal(outcomeNum, { type: "u32" }),
     ];
 
-    const txHash = await this.invokeContract(caller, "resolve_market", args);
-    return { txHash };
+    const { hash } = await this.invokeContract(caller, "resolve_market", args);
+    return { txHash: hash };
   }
 
   async claimWinnings(params: ClaimWinningsParams): Promise<TransactionResult<number>> {
@@ -193,8 +208,19 @@ export class StellarMarketClient implements PredictionMarketClient {
       nativeToScVal(caller, { type: "address" }),
     ];
 
-    const txHash = await this.invokeContract(caller, "claim_winnings", args);
-    return { txHash };
+    const { hash, returnValue } = await this.invokeContract(caller, "claim_winnings", args);
+
+    // Decode the returned i128 payout (in stroops) → XLM
+    let payoutXlm: number | undefined;
+    if (returnValue) {
+      try {
+        const raw = scValToNative(returnValue);
+        if (typeof raw === "bigint" || typeof raw === "number") {
+          payoutXlm = Number(raw) / 10_000_000;
+        }
+      } catch { /* ignore */ }
+    }
+    return { txHash: hash, data: payoutXlm };
   }
 
   async getMarket(marketId: string): Promise<Market | null> {
