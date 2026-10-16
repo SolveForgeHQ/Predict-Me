@@ -157,15 +157,16 @@ async function invokeContract(
 // ── create_market ─────────────────────────────────────────────
 
 /**
- * Calls create_market(question, end_timestamp, category) on the contract.
+ * Calls create_market(question, end_timestamp, category, outcomes) on the contract.
  *
  * Contract signature (contracts/src/lib.rs):
- *   create_market(env, question: String, end_timestamp: u64, category: String) -> u32
+ *   create_market(env, question: String, end_timestamp: u64, category: String, outcomes: Vec<String>) -> u32
  *
  * @param callerPublicKey — must match the contract's stored admin address
  * @param question        — market question text
  * @param endTimestamp    — Unix seconds (not milliseconds)
  * @param category        — display category string
+ * @param outcomes        — N >= 2 labels (defaults to ["YES","NO"])
  * @returns transaction hash
  * @throws ContractError
  */
@@ -173,7 +174,8 @@ export async function createMarket(
   callerPublicKey: string,
   question: string,
   endTimestamp: number,
-  category: string
+  category: string,
+  outcomes: string[] = ["YES", "NO"]
 ): Promise<string> {
   if (!callerPublicKey) {
     throw new ContractError("WALLET_REQUIRED", "Wallet must be connected to create a market.");
@@ -183,6 +185,7 @@ export async function createMarket(
     nativeToScVal(question,      { type: "string" }),
     nativeToScVal(endTimestamp,  { type: "u64"    }),
     nativeToScVal(category,      { type: "string" }),
+    xdr.ScVal.scvVec(outcomes.map((label) => nativeToScVal(label, { type: "string" }))),
   ];
 
   return invokeContract(callerPublicKey, "create_market", args);
@@ -239,13 +242,38 @@ export async function fetchMarkets(): Promise<Market[] | null> {
           const state = scValToNative(entry.val.contractData().val());
           if (state) {
             const rawStatus = Number(state.status ?? 0);
+            const resolvedOutcomeIndex = rawStatus === 0 ? undefined : rawStatus - 1;
             const status: MarketStatus =
-              rawStatus === 0 ? "open" : rawStatus === 1 ? "resolved_yes" : "resolved_no";
-            const yesPool = state.yes_pool ? Number(state.yes_pool) / 10_000_000 : 0;
-            const noPool = state.no_pool ? Number(state.no_pool) / 10_000_000 : 0;
-            const total = yesPool + noPool;
-            const yesPercent = total > 0 ? Math.round((yesPool / total) * 100) : 50;
-            const noPercent = total > 0 ? 100 - yesPercent : 50;
+              rawStatus === 0
+                ? "open"
+                : resolvedOutcomeIndex === 0 && ((state.outcomes as unknown[] | undefined)?.length ?? 2) === 2
+                ? "resolved_yes"
+                : resolvedOutcomeIndex === 1 && ((state.outcomes as unknown[] | undefined)?.length ?? 2) === 2
+                ? "resolved_no"
+                : "resolved";
+            const outcomes: string[] = Array.isArray((state as any).outcomes)
+              ? (state as any).outcomes.map(String)
+              : ["YES", "NO"];
+            let pools: number[] = Array.isArray((state as any).pools)
+              ? (state as any).pools.map((p: unknown) => Number(p ?? 0) / 10_000_000)
+              : [];
+            if (pools.length === 0 && ((state as any).yes_pool !== undefined || (state as any).no_pool !== undefined)) {
+              const yesPool = state.yes_pool ? Number(state.yes_pool) / 10_000_000 : 0;
+              const noPool = state.no_pool ? Number(state.no_pool) / 10_000_000 : 0;
+              pools = [yesPool, noPool];
+            }
+            while (pools.length < outcomes.length) pools.push(0);
+            pools = pools.slice(0, outcomes.length);
+            const total = pools.reduce((a, b) => a + b, 0);
+            const outcomePercents = outcomes.map((_, i) =>
+              total > 0 ? Math.round((pools[i] / total) * 100) : Math.round(100 / outcomes.length)
+            );
+            if (total <= 0) {
+              const drift = 100 - outcomePercents.reduce((a, b) => a + b, 0);
+              outcomePercents[outcomes.length - 1] += drift;
+            }
+            const yesPercent = outcomes.length === 2 ? outcomePercents[0] : 50;
+            const noPercent = outcomes.length === 2 ? outcomePercents[1] : 50;
             const endsAt = state.end_timestamp
               ? new Date(Number(state.end_timestamp) * 1000).toISOString()
               : new Date(Date.now() + 86400000).toISOString();
@@ -254,11 +282,15 @@ export async function fetchMarkets(): Promise<Market[] | null> {
               id: String(id),
               question: String(state.question ?? `Market #${id}`),
               category: String(state.category ?? "General"),
+              outcomes,
+              outcomePercents,
+              outcomePools: pools,
               yesPercent,
               noPercent,
               totalPool: total,
               endsAt,
               status,
+              resolvedOutcomeIndex,
             });
           }
         }
@@ -299,9 +331,9 @@ export async function fetchPosition(
   const contract = new Contract(CONTRACT_ID);
 
   try {
-    async function readSharesForSide(side: 0 | 1): Promise<number> {
+    async function readSharesForSide(side: number): Promise<number> {
       try {
-        // DataKey::Shares(u32, Address, u32)
+        // DataKey::Shares(u32, Address, u32) — side is now outcome index 0..N-1
         const keyVal = xdr.ScVal.scvVec([
           nativeToScVal("Shares", { type: "symbol" }),
           nativeToScVal(marketIdNum, { type: "u32" }),
@@ -328,20 +360,41 @@ export async function fetchPosition(
       return 0;
     }
 
-    const [yesShares, noShares] = await Promise.all([
-      readSharesForSide(0),
-      readSharesForSide(1),
-    ]);
+    // Outcome count: read from market state (default 2 for legacy)
+    let outcomeCount = 2;
+    try {
+      const marketKey = xdr.ScVal.scvVec([
+        nativeToScVal("Market", { type: "symbol" }),
+        nativeToScVal(marketIdNum, { type: "u32" }),
+      ]);
+      const mEntry = await server.getContractData(
+        contract.address(),
+        marketKey,
+        rpc.Durability.Persistent
+      );
+      if (mEntry && mEntry.val) {
+        const mState = scValToNative(mEntry.val.contractData().val()) as any;
+        if (Array.isArray(mState?.outcomes)) outcomeCount = mState.outcomes.length;
+      }
+    } catch {
+      // keep default
+    }
+
+    const balances = await Promise.all(
+      Array.from({ length: outcomeCount }, (_, i) => readSharesForSide(i))
+    );
 
     return {
-      yesShares,
-      noShares,
+      balances,
+      yesShares: balances[0] ?? 0,
+      noShares: balances[1] ?? 0,
       avgYesPrice: null,
       avgNoPrice: null,
     };
   } catch (err) {
     console.warn("fetchPosition failed:", err);
     return {
+      balances: [0, 0],
       yesShares: 0,
       noShares: 0,
       avgYesPrice: null,
@@ -352,14 +405,14 @@ export async function fetchPosition(
 
 
 /**
- * Calls buy_shares(market_id, side, amount) on the contract.
+ * Calls buy_shares(market_id, outcome_index, amount, caller) on the contract.
  *
  * Contract signature (contracts/src/lib.rs):
- *   buy_shares(env, market_id: u32, side: u32, amount: i128)
+ *   buy_shares(env, market_id: u32, outcome_index: u32, amount: i128, caller: Address)
  *
  * @param callerPublicKey — connected wallet public key
  * @param marketId        — market ID (converted to u32)
- * @param side            — "YES" (0) or "NO" (1)
+ * @param side            — outcome index 0..N-1, or "YES" (0) / "NO" (1) for N=2
  * @param amountXlm       — XLM amount (converted to stroops: 1 XLM = 10,000,000 stroops)
  * @returns transaction hash
  * @throws ContractError
@@ -367,7 +420,7 @@ export async function fetchPosition(
 export async function buyShares(
   callerPublicKey: string,
   marketId: string | number,
-  side: "YES" | "NO",
+  side: number | "YES" | "NO",
   amountXlm: number
 ): Promise<string> {
   if (!callerPublicKey) {
@@ -375,7 +428,7 @@ export async function buyShares(
   }
 
   const marketIdNum = typeof marketId === "number" ? marketId : parseInt(marketId, 10) || 1;
-  const sideNum = side === "YES" ? 0 : 1;
+  const sideNum = typeof side === "number" ? side : side === "YES" ? 0 : 1;
   const amountStroops = BigInt(Math.round(amountXlm * 10_000_000));
 
   if (amountStroops <= 0n) {
@@ -386,34 +439,35 @@ export async function buyShares(
     nativeToScVal(marketIdNum,    { type: "u32"  }),
     nativeToScVal(sideNum,        { type: "u32"  }),
     nativeToScVal(amountStroops,  { type: "i128" }),
+    nativeToScVal(callerPublicKey, { type: "address" }),
   ];
 
   return invokeContract(callerPublicKey, "buy_shares", args);
 }
 
 /**
- * Calls resolve_market(market_id, outcome) on the contract. Admin only.
+ * Calls resolve_market(market_id, winning_outcome_index) on the contract. Admin only.
  *
  * Contract signature (contracts/src/lib.rs):
  *   resolve_market(env, market_id: u32, outcome: u32)
  *
  * @param callerPublicKey — admin wallet public key
  * @param marketId        — market ID (converted to u32)
- * @param outcome         — "YES" (0) or "NO" (1)
+ * @param outcome         — winning outcome index 0..N-1, or "YES" (0) / "NO" (1)
  * @returns transaction hash
  * @throws ContractError
  */
 export async function resolveMarket(
   callerPublicKey: string,
   marketId: string | number,
-  outcome: "YES" | "NO"
+  outcome: number | "YES" | "NO"
 ): Promise<string> {
   if (!callerPublicKey) {
     throw new ContractError("WALLET_REQUIRED", "Wallet must be connected to resolve a market.");
   }
 
   const marketIdNum = typeof marketId === "number" ? marketId : parseInt(marketId, 10) || 1;
-  const outcomeNum = outcome === "YES" ? 0 : 1;
+  const outcomeNum = typeof outcome === "number" ? outcome : outcome === "YES" ? 0 : 1;
 
   const args: xdr.ScVal[] = [
     nativeToScVal(marketIdNum, { type: "u32" }),
@@ -424,10 +478,10 @@ export async function resolveMarket(
 }
 
 /**
- * Calls claim_winnings(market_id) on the contract.
+ * Calls claim_winnings(market_id, caller) on the contract.
  *
  * Contract signature (contracts/src/lib.rs):
- *   claim_winnings(env, market_id: u32)
+ *   claim_winnings(env, market_id: u32, caller: Address)
  *
  * @param callerPublicKey — connected wallet public key
  * @param marketId        — market ID (converted to u32)
@@ -446,6 +500,7 @@ export async function claimWinnings(
 
   const args: xdr.ScVal[] = [
     nativeToScVal(marketIdNum, { type: "u32" }),
+    nativeToScVal(callerPublicKey, { type: "address" }),
   ];
 
   return invokeContract(callerPublicKey, "claim_winnings", args);

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Market } from "@/lib/markets";
+import { outcomeColor } from "@/lib/types";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
@@ -19,17 +20,22 @@ export default function TradePanel({ market }: Props) {
   const { publicKey, connected, connecting, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { chain, client, chainMetadata } = useChain();
-  const [tab, setTab] = useState<"YES" | "NO">("YES");
-  const [yesAmount, setYesAmount] = useState("");
-  const [noAmount, setNoAmount] = useState("");
+  const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];
+  const percents = market.outcomePercents.length === outcomes.length
+    ? market.outcomePercents
+    : outcomes.map(() => Math.round(100 / outcomes.length));
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [amount, setAmount] = useState("");
 
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [txHash, setTxHash] = useState("");
 
   const isPending = pendingStep !== null;
-  const isYes = tab === "YES";
-  const currentAmount = isYes ? yesAmount : noAmount;
+  const selectedLabel = outcomes[selectedIndex] ?? `Outcome ${selectedIndex + 1}`;
+  const selectedColor = outcomeColor(selectedIndex);
+  const selectedPercent = percents[selectedIndex] ?? 0;
+  const selectedPrice = selectedPercent / 100;
   const currency = chainMetadata.currency;
 
   const getStepLabel = (step: PendingStep): string => {
@@ -45,16 +51,9 @@ export default function TradePanel({ market }: Props) {
     }
   };
 
-  const yesPrice = market.yesPercent / 100;
-  const noPrice = market.noPercent / 100;
-
-  const estYesShares =
-    yesAmount && parseFloat(yesAmount) > 0
-      ? (parseFloat(yesAmount) / yesPrice).toFixed(2)
-      : "—";
-  const estNoShares =
-    noAmount && parseFloat(noAmount) > 0
-      ? (parseFloat(noAmount) / noPrice).toFixed(2)
+  const estShares =
+    amount && parseFloat(amount) > 0 && selectedPrice > 0
+      ? (parseFloat(amount) / selectedPrice).toFixed(2)
       : "—";
 
   const handleBuy = async () => {
@@ -68,7 +67,7 @@ export default function TradePanel({ market }: Props) {
       return;
     }
 
-    const amountNum = parseFloat(currentAmount);
+    const amountNum = parseFloat(amount);
     if (!amountNum || amountNum <= 0) {
       setErrorMsg(`Please enter a valid ${currency} amount greater than 0.`);
       return;
@@ -83,7 +82,7 @@ export default function TradePanel({ market }: Props) {
 
       const callPromise = client.buyShares({
         marketId: market.id,
-        outcome: tab.toLowerCase() as "yes" | "no",
+        outcomeIndex: selectedIndex,
         amount: amountNum,
         callerAddress: publicKey ?? undefined,
       });
@@ -99,10 +98,9 @@ export default function TradePanel({ market }: Props) {
       setTxHash(result.txHash);
       toast.success(
         "Trade Confirmed!",
-        `Successfully purchased ${tab} shares on ${chainMetadata.name}.`
+        `Successfully purchased ${selectedLabel} shares on ${chainMetadata.name}.`
       );
-      if (isYes) setYesAmount("");
-      else setNoAmount("");
+      setAmount("");
     } catch (err) {
       const message = parseTransactionError(err, {
         chain,
@@ -123,62 +121,52 @@ export default function TradePanel({ market }: Props) {
       style={{
         background: "linear-gradient(135deg, #161B26, #131820)",
         border: "1px solid #1E2435",
-        boxShadow: isYes
-          ? "0 0 40px rgba(0,208,132,0.08)"
-          : "0 0 40px rgba(255,77,94,0.08)",
+        boxShadow: `0 0 40px ${selectedColor}14`,
         transition: "box-shadow 0.3s ease",
       }}
     >
-      {/* Tab switcher */}
-      <div className="flex" style={{ borderBottom: "1px solid #1E2435" }}>
-        {(["YES", "NO"] as const).map((side) => (
-          <button
-            key={side}
-            onClick={() => {
-              setTab(side);
-              setErrorMsg("");
-              setTxHash("");
-            }}
-            disabled={isPending}
-            className="side-tab flex-1 py-3 text-sm font-bold disabled:opacity-50"
-            style={{
-              color:
-                tab === side
-                  ? side === "YES"
-                    ? "#00D084"
-                    : "#FF4D5E"
-                  : "#8B93A7",
-              backgroundColor:
-                tab === side
-                  ? side === "YES"
-                    ? "#00D08412"
-                    : "#FF4D5E12"
-                  : "transparent",
-              borderBottom:
-                tab === side
-                  ? `2px solid ${side === "YES" ? "#00D084" : "#FF4D5E"}`
-                  : "2px solid transparent",
-            }}
-          >
-            Buy {side}
-          </button>
-        ))}
+      {/* Outcome selector — N options, wraps without breaking layout */}
+      <div
+        className={`grid ${outcomes.length <= 2 ? "grid-cols-2" : outcomes.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}
+        style={{ borderBottom: "1px solid #1E2435" }}
+      >
+        {outcomes.map((label, i) => {
+          const color = outcomeColor(i);
+          const active = selectedIndex === i;
+          return (
+            <button
+              key={`${label}-${i}`}
+              onClick={() => {
+                setSelectedIndex(i);
+                setErrorMsg("");
+                setTxHash("");
+              }}
+              disabled={isPending}
+              className="side-tab py-3 px-2 text-sm font-bold disabled:opacity-50 truncate"
+              style={{
+                color: active ? color : "#8B93A7",
+                backgroundColor: active ? `${color}12` : "transparent",
+                borderBottom: active ? `2px solid ${color}` : "2px solid transparent",
+              }}
+              title={label}
+            >
+              {label} · {percents[i] ?? 0}%
+            </button>
+          );
+        })}
       </div>
 
       <div className="p-5 flex flex-col gap-4">
         {/* Price chip */}
         <div className="flex items-center justify-between">
           <p className="text-xs" style={{ color: "#8B93A7" }}>
-            Current price
+            {selectedLabel} price
           </p>
           <span
             className="text-sm font-bold px-3 py-1 rounded-full"
-            style={{
-              backgroundColor: isYes ? "#00D08422" : "#FF4D5E22",
-              color: isYes ? "#00D084" : "#FF4D5E",
-            }}
+            style={{ backgroundColor: `${selectedColor}22`, color: selectedColor }}
           >
-            {isYes ? market.yesPercent : market.noPercent}¢
+            {selectedPercent}¢
           </span>
         </div>
 
@@ -189,15 +177,9 @@ export default function TradePanel({ market }: Props) {
           </label>
           <div
             className="flex items-center rounded-xl overflow-hidden"
-            style={{
-              border: `1px solid ${isYes ? "#00D08444" : "#FF4D5E44"}`,
-              backgroundColor: "#0B0E14",
-            }}
+            style={{ border: `1px solid ${selectedColor}44`, backgroundColor: "#0B0E14" }}
           >
-            <span
-              className="pl-3 text-sm select-none font-semibold"
-              style={{ color: "#8B93A7" }}
-            >
+            <span className="pl-3 text-sm select-none font-semibold" style={{ color: "#8B93A7" }}>
               {currency}
             </span>
             <input
@@ -206,11 +188,10 @@ export default function TradePanel({ market }: Props) {
               step="any"
               placeholder="0.00"
               disabled={isPending}
-              value={isYes ? yesAmount : noAmount}
+              value={amount}
               onChange={(e) => {
                 setErrorMsg("");
-                if (isYes) setYesAmount(e.target.value);
-                else setNoAmount(e.target.value);
+                setAmount(e.target.value);
               }}
               className="flex-1 bg-transparent py-3 pr-3 pl-2 text-sm outline-none disabled:opacity-50"
               style={{ color: "#F2F4F7" }}
@@ -223,10 +204,8 @@ export default function TradePanel({ market }: Props) {
           className="flex items-center justify-between text-xs rounded-lg px-3 py-2"
           style={{ backgroundColor: "#0B0E14" }}
         >
-          <span style={{ color: "#8B93A7" }}>Est. shares</span>
-          <span style={{ color: "#F2F4F7", fontWeight: 700 }}>
-            {isYes ? estYesShares : estNoShares}
-          </span>
+          <span style={{ color: "#8B93A7" }}>Est. {selectedLabel} shares</span>
+          <span style={{ color: "#F2F4F7", fontWeight: 700 }}>{estShares}</span>
         </div>
 
         {/* Wrong network warning */}
@@ -279,11 +258,10 @@ export default function TradePanel({ market }: Props) {
           ) : (
             <button
               onClick={handleBuy}
-              disabled={isPending || !currentAmount || parseFloat(currentAmount) <= 0}
-              className={`w-full flex items-center justify-center gap-2 transition-all ${
-                isYes ? "btn-yes" : "btn-no"
-              } disabled:opacity-50 disabled:cursor-not-allowed`}
+              disabled={isPending || !amount || parseFloat(amount) <= 0}
+              className="w-full flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white"
               style={{
+                backgroundColor: selectedColor,
                 padding: "0.875rem",
                 borderRadius: "0.75rem",
                 fontWeight: 700,
@@ -296,7 +274,7 @@ export default function TradePanel({ market }: Props) {
                   Processing trade on {chainMetadata.shortName}…
                 </>
               ) : (
-                `Buy ${tab}`
+                `Buy ${selectedLabel}`
               )}
             </button>
           )

@@ -29,6 +29,10 @@ export const marketCache = sqliteTable('market_cache', {
   category: text('category'),
   endTime: integer('end_time').notNull(),
   status: text('status').notNull(),
+  outcomes: text('outcomes').notNull().default('["YES","NO"]'),
+  pools: text('pools').notNull().default('[0,0]'),
+  resolvedOutcomeIndex: integer('resolved_outcome_index'),
+  // ── Deprecated binary columns (populated when outcomes.length === 2) ──
   yesPool: real('yes_pool').default(0),
   noPool: real('no_pool').default(0),
   resolvedOutcome: text('resolved_outcome'),

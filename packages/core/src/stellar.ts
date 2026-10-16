@@ -19,6 +19,12 @@ import type {
   ClaimWinningsParams,
   TransactionResult,
 } from "@predict-me/types";
+import {
+  normalizeOutcomes,
+  validateOutcomes,
+  buildMarket,
+  buildPosition,
+} from "@predict-me/types";
 import type { PredictionMarketClient } from "./interface";
 
 export interface StellarMarketClientConfig {
@@ -134,10 +140,16 @@ export class StellarMarketClient implements PredictionMarketClient {
       : params.endTime;
 
     const category = params.category ?? "General";
+    const outcomes = normalizeOutcomes(params.outcomes);
+    validateOutcomes(outcomes);
+    const outcomesScVal = xdr.ScVal.scvVec(
+      outcomes.map((label) => nativeToScVal(label, { type: "string" })),
+    );
     const args: xdr.ScVal[] = [
       nativeToScVal(params.question, { type: "string" }),
       nativeToScVal(endTimestamp, { type: "u64" }),
       nativeToScVal(category, { type: "string" }),
+      outcomesScVal,
     ];
 
     const { hash, returnValue } = await this.invokeContract(caller, "create_market", args);
@@ -152,6 +164,41 @@ export class StellarMarketClient implements PredictionMarketClient {
     return { txHash: hash, data: marketId };
   }
 
+  private resolveLocalOutcomeIndex(
+    params: { outcomeIndex?: number; outcome?: string | number },
+    fallbackCount = 2,
+  ): number | null {
+    // Fast path without RPC: explicit index, number, or yes/no.
+    if (params.outcomeIndex !== undefined) return params.outcomeIndex;
+    const o = params.outcome;
+    if (typeof o === "number" && Number.isInteger(o) && o >= 0) return o;
+    if (typeof o === "string") {
+      const low = o.toLowerCase();
+      if (low === "yes") return 0;
+      if (low === "no") return 1;
+      const asNum = Number(o);
+      if (Number.isInteger(asNum) && asNum >= 0) return asNum;
+    }
+    return null;
+  }
+
+  private async resolveOutcomeIndex(
+    params: { outcomeIndex?: number; outcome?: string | number },
+    marketId: string,
+  ): Promise<number> {
+    const fast = this.resolveLocalOutcomeIndex(params);
+    if (fast !== null) return fast;
+    // Label string (e.g. candidate name): resolve against on-chain outcomes.
+    const market = await this.getMarket(marketId);
+    const outcomes = market?.outcomes ?? ["YES", "NO"];
+    const o = params.outcome;
+    if (typeof o === "string") {
+      const idx = outcomes.findIndex((l) => l.toLowerCase() === o.toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    throw new Error("Outcome index is required");
+  }
+
   async buyShares(params: BuySharesParams): Promise<TransactionResult<void>> {
     const caller = params.callerAddress ?? this.defaultCallerPublicKey;
     if (!caller) {
@@ -159,7 +206,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     }
 
     const marketIdNum = parseInt(params.marketId, 10);
-    const sideNum = params.outcome.toLowerCase() === "yes" ? 0 : 1;
+    const sideNum = await this.resolveOutcomeIndex(params, params.marketId);
     // 1 XLM = 10^7 stroops
     const amountStroops = BigInt(Math.round(params.amount * 10_000_000));
 
@@ -185,7 +232,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     }
 
     const marketIdNum = parseInt(params.marketId, 10);
-    const outcomeNum = params.outcome.toLowerCase() === "yes" ? 0 : 1;
+    const outcomeNum = await this.resolveOutcomeIndex(params, params.marketId);
 
     const args: xdr.ScVal[] = [
       nativeToScVal(marketIdNum, { type: "u32" }),
@@ -245,25 +292,39 @@ export class StellarMarketClient implements PredictionMarketClient {
 
       const rawStatus = Number(state.status ?? 0);
       const status: MarketStatus = rawStatus === 0 ? "open" : "resolved";
-      const resolvedOutcome = rawStatus === 1 ? "yes" : rawStatus === 2 ? "no" : undefined;
+      const resolvedOutcomeIndex = rawStatus === 0 ? undefined : rawStatus - 1;
 
-      const yesPool = state.yes_pool ? Number(state.yes_pool) / 10_000_000 : 0;
-      const noPool = state.no_pool ? Number(state.no_pool) / 10_000_000 : 0;
+      const outcomes: string[] = Array.isArray(state.outcomes)
+        ? state.outcomes.map((o: unknown) => String(o))
+        : ["YES", "NO"];
+      const rawPools: unknown[] = Array.isArray(state.pools) ? state.pools : [];
+      const pools = rawPools.map((p) => {
+        if (typeof p === "bigint") return Number(p) / 10_000_000;
+        if (typeof p === "number") return p / 10_000_000;
+        const n = Number(p ?? 0);
+        return Number.isFinite(n) ? n / 10_000_000 : 0;
+      });
+      // Legacy storage (pre multi-outcome): yes_pool / no_pool
+      if (pools.length === 0 && (state.yes_pool !== undefined || state.no_pool !== undefined)) {
+        const yesPool = state.yes_pool ? Number(state.yes_pool) / 10_000_000 : 0;
+        const noPool = state.no_pool ? Number(state.no_pool) / 10_000_000 : 0;
+        pools.push(yesPool, noPool);
+      }
+      while (pools.length < outcomes.length) pools.push(0);
       const endTime = state.end_timestamp
         ? Number(state.end_timestamp) * 1000
         : Date.now() + 86400000;
 
-      return {
+      return buildMarket({
         id: marketId,
         question: String(state.question ?? `Market #${marketId}`),
         category: String(state.category ?? "General"),
         endTime,
         status,
-        yesPool,
-        noPool,
-        totalPool: yesPool + noPool,
-        resolvedOutcome,
-      };
+        outcomes,
+        pools: pools.slice(0, outcomes.length),
+        resolvedOutcomeIndex,
+      });
     } catch {
       return null;
     }
@@ -276,7 +337,7 @@ export class StellarMarketClient implements PredictionMarketClient {
     try {
       const marketIdNum = parseInt(marketId, 10);
 
-      const readShares = async (side: 0 | 1): Promise<number> => {
+      const readShares = async (side: number): Promise<number> => {
         try {
           const keyVal = xdr.ScVal.scvVec([
             nativeToScVal("Shares", { type: "symbol" }),
@@ -303,19 +364,19 @@ export class StellarMarketClient implements PredictionMarketClient {
         return 0;
       };
 
-      const [yesShares, noShares] = await Promise.all([
-        readShares(0),
-        readShares(1),
-      ]);
+      const market = await this.getMarket(marketId);
+      const outcomeCount = market?.outcomes.length ?? 2;
+      const balances = await Promise.all(
+        Array.from({ length: outcomeCount }, (_, i) => readShares(i)),
+      );
 
-      return {
+      return buildPosition({
         userId: userAddress,
         marketId,
-        yesShares,
-        noShares,
+        balances,
         avgYesPrice: null,
         avgNoPrice: null,
-      };
+      });
     } catch {
       return null;
     }

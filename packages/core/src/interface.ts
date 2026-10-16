@@ -21,15 +21,15 @@ export interface PredictionMarketClient {
   createMarket(params: CreateMarketParams): Promise<TransactionResult<string>>;
 
   /**
-   * Purchases YES or NO shares in a specific market.
-   * @param params Share purchase parameters (marketId, outcome, amount in base token units)
+   * Purchases shares on one outcome of a market (N >= 2; binary YES/NO is N=2).
+   * @param params Share purchase parameters (marketId, outcomeIndex | outcome, amount in base token units)
    * @returns TransactionResult containing the transaction hash.
    */
   buyShares(params: BuySharesParams): Promise<TransactionResult<void>>;
 
   /**
-   * Resolves a market to its winning outcome.
-   * @param params Resolution parameters (marketId, outcome: "yes" | "no")
+   * Resolves a market to its winning outcome index.
+   * @param params Resolution parameters (marketId, winningOutcomeIndex | outcome)
    * @returns TransactionResult containing the transaction hash.
    */
   resolveMarket(params: ResolveMarketParams): Promise<TransactionResult<void>>;
@@ -49,10 +49,10 @@ export interface PredictionMarketClient {
   getMarket(marketId: string): Promise<Market | null>;
 
   /**
-   * Fetches the user's YES/NO share balance and position in a market.
+   * Fetches the user's per-outcome share balances in a market.
    * @param marketId Market identifier
    * @param userAddress The user's public key or wallet address
-   * @returns Position object with yesShares and noShares, or null if query fails.
+   * @returns Position object with balances[], or null if query fails.
    */
   getPosition(marketId: string, userAddress: string): Promise<Position | null>;
 

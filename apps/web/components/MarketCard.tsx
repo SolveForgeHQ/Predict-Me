@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Clock, Flame } from "lucide-react";
 import { Market, formatPool, timeRemaining } from "@/lib/markets";
+import { outcomeColor, winningLabel } from "@/lib/types";
 
 interface Props {
   market: Market;
@@ -25,6 +26,13 @@ function getLabel(market: Market): { Icon: React.ElementType; text: string; colo
 export default function MarketCard({ market }: Props) {
   const categoryColor = CATEGORY_COLORS[market.category] ?? "#8B93A7";
   const label = getLabel(market);
+  const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];
+  const percents = market.outcomePercents.length === outcomes.length
+    ? market.outcomePercents
+    : outcomes.map(() => Math.round(100 / outcomes.length));
+  const isBinary = outcomes.length === 2;
+  const winner = winningLabel(market);
+  const leaderIndex = percents.indexOf(Math.max(...percents));
 
   return (
     <Link href={`/market/${market.id}`} className="block">
@@ -43,11 +51,11 @@ export default function MarketCard({ market }: Props) {
             <span
               className="text-xs font-semibold px-2.5 py-0.5 rounded-full"
               style={{
-                backgroundColor: market.status === "resolved_yes" ? "#00D08422" : "#FF4D5E22",
-                color: market.status === "resolved_yes" ? "#00D084" : "#FF4D5E",
+                backgroundColor: `${outcomeColor(market.resolvedOutcomeIndex ?? 0)}22`,
+                color: outcomeColor(market.resolvedOutcomeIndex ?? 0),
               }}
             >
-              {market.status === "resolved_yes" ? "Resolved YES" : "Resolved NO"}
+              Resolved{winner ? `: ${winner}` : ""}
             </span>
           ) : label ? (
             <span
@@ -68,21 +76,42 @@ export default function MarketCard({ market }: Props) {
           {market.question}
         </p>
 
-        {/* YES / NO bar */}
+        {/* Outcome bar — N segments, never breaks layout */}
         <div>
-          <div className="flex justify-between text-xs font-bold mb-1.5">
-            <span style={{ color: "#00D084" }}>YES {market.yesPercent}%</span>
-            <span style={{ color: "#FF4D5E" }}>NO {market.noPercent}%</span>
+          <div className="flex justify-between text-xs font-bold mb-1.5 gap-2">
+            {isBinary ? (
+              <>
+                <span style={{ color: outcomeColor(0) }}>YES {percents[0]}%</span>
+                <span style={{ color: outcomeColor(1) }}>NO {percents[1]}%</span>
+              </>
+            ) : (
+              <>
+                <span className="truncate" style={{ color: outcomeColor(leaderIndex) }}>
+                  {outcomes[leaderIndex]} {percents[leaderIndex]}%
+                </span>
+                <span style={{ color: "#8B93A7" }}>{outcomes.length} outcomes</span>
+              </>
+            )}
           </div>
-          <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: "#0B0E14" }}>
-            <div
-              className="h-full rounded-full"
-              style={{
-                width: `${market.yesPercent}%`,
-                background: "linear-gradient(90deg, #00D084, #00B574)",
-              }}
-            />
+          <div className="h-2 rounded-full overflow-hidden flex" style={{ backgroundColor: "#0B0E14" }}>
+            {percents.map((p, i) => (
+              <div
+                key={i}
+                className="h-full"
+                style={{ width: `${p}%`, backgroundColor: outcomeColor(i) }}
+                title={`${outcomes[i]} ${p}%`}
+              />
+            ))}
           </div>
+          {!isBinary && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+              {outcomes.map((o, i) => (
+                <span key={i} className="text-[11px] font-semibold" style={{ color: "#8B93A7" }}>
+                  <span style={{ color: outcomeColor(i) }}>●</span> {o} {percents[i]}%
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Meta */}

@@ -14,10 +14,40 @@ export interface CachedMarket {
   category: string;
   endTime: number;
   status: 'open' | 'closed' | 'resolved';
+  outcomes: string[];
+  pools: number[];
+  resolvedOutcomeIndex?: number;
+  // ── Backward-compat (populated when outcomes.length === 2) ──
   yesPool: number;
   noPool: number;
-  resolvedOutcome?: 'yes' | 'no';
+  resolvedOutcome?: 'yes' | 'no' | string;
   updatedAt: number;
+}
+
+function withBinaryCompat(m: Omit<CachedMarket, 'yesPool' | 'noPool' | 'resolvedOutcome'> & { resolvedOutcome?: 'yes' | 'no' | string }): CachedMarket {
+  const yesPool = m.outcomes.length === 2 ? (m.pools[0] ?? 0) : 0;
+  const noPool = m.outcomes.length === 2 ? (m.pools[1] ?? 0) : 0;
+  let resolvedOutcome = m.resolvedOutcome;
+  if (resolvedOutcome === undefined && m.resolvedOutcomeIndex !== undefined) {
+    resolvedOutcome = m.outcomes.length === 2
+      ? (m.resolvedOutcomeIndex === 0 ? 'yes' : 'no')
+      : (m.outcomes[m.resolvedOutcomeIndex] ?? String(m.resolvedOutcomeIndex));
+  }
+  return { ...m, yesPool, noPool, resolvedOutcome };
+}
+
+function parseOutcomes(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((o) => String(o));
+  return ['YES', 'NO'];
+}
+
+function parsePools(raw: unknown, divisor: number): number[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as unknown[]).map((p) => {
+    if (typeof p === 'bigint') return Number(p) / divisor;
+    const n = Number(p ?? 0);
+    return Number.isFinite(n) ? n / divisor : 0;
+  });
 }
 
 interface EnvBindings {
@@ -66,9 +96,9 @@ const PREDICTION_MARKET_ABI = [
           { name: 'question', type: 'string', internalType: 'string' },
           { name: 'endTime', type: 'uint256', internalType: 'uint256' },
           { name: 'status', type: 'uint8', internalType: 'enum PredictionMarket.MarketStatus' },
-          { name: 'outcome', type: 'bool', internalType: 'bool' },
-          { name: 'yesPool', type: 'uint256', internalType: 'uint256' },
-          { name: 'noPool', type: 'uint256', internalType: 'uint256' },
+          { name: 'winningOutcome', type: 'uint256', internalType: 'uint256' },
+          { name: 'outcomeLabels', type: 'string[]', internalType: 'string[]' },
+          { name: 'pools', type: 'uint256[]', internalType: 'uint256[]' },
           { name: 'totalPool', type: 'uint256', internalType: 'uint256' },
         ],
       },
@@ -141,27 +171,33 @@ async function fetchMarketsFromStellar(
           const rawStatus = Number(state.status ?? 0);
           const statusStr: 'open' | 'closed' | 'resolved' =
             rawStatus === 0 ? 'open' : 'resolved';
-          const resolvedOutcome: 'yes' | 'no' | undefined =
-            rawStatus === 1 ? 'yes' : rawStatus === 2 ? 'no' : undefined;
+          const resolvedOutcomeIndex = rawStatus === 0 ? undefined : rawStatus - 1;
 
-          const yesPool = state.yes_pool ? Number(state.yes_pool) / 10_000_000 : 0;
-          const noPool = state.no_pool ? Number(state.no_pool) / 10_000_000 : 0;
+          const outcomes = parseOutcomes((state as any).outcomes);
+          let pools = parsePools((state as any).pools, 10_000_000);
+          if (pools.length === 0 && ((state as any).yes_pool !== undefined || (state as any).no_pool !== undefined)) {
+            const yesPool = (state as any).yes_pool ? Number((state as any).yes_pool) / 10_000_000 : 0;
+            const noPool = (state as any).no_pool ? Number((state as any).no_pool) / 10_000_000 : 0;
+            pools = [yesPool, noPool];
+          }
+          while (pools.length < outcomes.length) pools.push(0);
+          pools = pools.slice(0, outcomes.length);
           const endTimestamp = state.end_timestamp
             ? Number(state.end_timestamp) * 1000
             : Date.now() + 86400000;
 
-          results.push({
+          results.push(withBinaryCompat({
             id: String(id),
             chain: 'stellar',
             question: String(state.question ?? `Market #${id}`),
             category: String(state.category ?? 'General'),
             endTime: endTimestamp,
             status: statusStr,
-            yesPool,
-            noPool,
-            resolvedOutcome,
+            outcomes,
+            pools,
+            resolvedOutcomeIndex,
             updatedAt: Date.now(),
-          });
+          }));
         }
       }
     } catch {
@@ -217,35 +253,50 @@ async function fetchMarketsFromAvalanche(
         question: string;
         endTime: bigint;
         status: number;
-        outcome: boolean;
-        yesPool: bigint;
-        noPool: bigint;
-        totalPool: bigint;
+        winningOutcome?: bigint;
+        outcomeLabels?: string[];
+        pools?: bigint[];
+        totalPool?: bigint;
+        // legacy binary fields
+        outcome?: boolean;
+        yesPool?: bigint;
+        noPool?: bigint;
       };
 
       if (data) {
         const rawStatus = Number(data.status);
         const statusStr: 'open' | 'closed' | 'resolved' =
           rawStatus === 0 ? 'open' : 'resolved';
-        const resolvedOutcome: 'yes' | 'no' | undefined =
-          rawStatus !== 0 ? (data.outcome ? 'yes' : 'no') : undefined;
-
-        const yesPool = Number(formatEther(data.yesPool));
-        const noPool = Number(formatEther(data.noPool));
+        const outcomes = Array.isArray(data.outcomeLabels) && data.outcomeLabels.length > 0
+          ? data.outcomeLabels.map(String)
+          : ['YES', 'NO'];
+        let pools: number[] = Array.isArray(data.pools)
+          ? data.pools.map((p) => Number(formatEther(p)))
+          : [];
+        if (pools.length === 0 && (data.yesPool !== undefined || data.noPool !== undefined)) {
+          pools = [Number(formatEther(data.yesPool ?? BigInt(0))), Number(formatEther(data.noPool ?? BigInt(0)))];
+        }
+        while (pools.length < outcomes.length) pools.push(0);
+        pools = pools.slice(0, outcomes.length);
+        const resolvedOutcomeIndex = rawStatus === 0
+          ? undefined
+          : data.winningOutcome !== undefined
+            ? Number(data.winningOutcome)
+            : (data.outcome ? 0 : 1);
         const endTime = Number(data.endTime) * 1000;
 
-        results.push({
+        results.push(withBinaryCompat({
           id: String(id),
           chain: 'avalanche',
           question: String(data.question || `Market #${id}`),
           category: 'General',
           endTime,
           status: statusStr,
-          yesPool,
-          noPool,
-          resolvedOutcome,
+          outcomes,
+          pools,
+          resolvedOutcomeIndex,
           updatedAt: Date.now(),
-        });
+        }));
       }
     } catch {
       // Ignore individual market lookup failures
@@ -316,9 +367,12 @@ async function syncChainMarkets(
               category: m.category,
               endTime: m.endTime,
               status: m.status,
+              outcomes: JSON.stringify(m.outcomes),
+              pools: JSON.stringify(m.pools),
+              resolvedOutcomeIndex: m.resolvedOutcomeIndex,
               yesPool: m.yesPool,
               noPool: m.noPool,
-              resolvedOutcome: m.resolvedOutcome,
+              resolvedOutcome: typeof m.resolvedOutcome === 'string' ? m.resolvedOutcome : undefined,
               updatedAt: m.updatedAt,
             })
             .onConflictDoUpdate({
@@ -330,9 +384,12 @@ async function syncChainMarkets(
                 category: m.category,
                 endTime: m.endTime,
                 status: m.status,
+                outcomes: JSON.stringify(m.outcomes),
+                pools: JSON.stringify(m.pools),
+                resolvedOutcomeIndex: m.resolvedOutcomeIndex,
                 yesPool: m.yesPool,
                 noPool: m.noPool,
-                resolvedOutcome: m.resolvedOutcome,
+                resolvedOutcome: typeof m.resolvedOutcome === 'string' ? m.resolvedOutcome : undefined,
                 updatedAt: m.updatedAt,
               },
             });
@@ -360,18 +417,36 @@ async function syncChainMarkets(
         );
 
       if (stored.length > 0) {
-        const dbMarkets: CachedMarket[] = stored.map((s) => ({
-          id: s.marketId || (s.id.includes(':') ? s.id.split(':')[1] : s.id),
-          chain: (s.chain as SupportedChain) || chain,
-          question: s.question,
-          category: s.category ?? 'General',
-          endTime: s.endTime,
-          status: s.status as 'open' | 'closed' | 'resolved',
-          yesPool: s.yesPool ?? 0,
-          noPool: s.noPool ?? 0,
-          resolvedOutcome: (s.resolvedOutcome as 'yes' | 'no') || undefined,
-          updatedAt: s.updatedAt,
-        }));
+        const dbMarkets: CachedMarket[] = stored.map((s) => {
+          let outcomes: string[] = ['YES', 'NO'];
+          let pools: number[] = [s.yesPool ?? 0, s.noPool ?? 0];
+          try {
+            if (typeof (s as any).outcomes === 'string' && (s as any).outcomes) {
+              const parsed = JSON.parse((s as any).outcomes as string);
+              if (Array.isArray(parsed)) outcomes = parsed.map(String);
+            }
+          } catch { /* keep default */ }
+          try {
+            if (typeof (s as any).pools === 'string' && (s as any).pools) {
+              const parsed = JSON.parse((s as any).pools as string);
+              if (Array.isArray(parsed)) pools = parsed.map(Number);
+            }
+          } catch { /* keep default */ }
+          const resolvedOutcomeIndex = (s as any).resolvedOutcomeIndex as number | null | undefined ?? undefined;
+          return withBinaryCompat({
+            id: s.marketId || (s.id.includes(':') ? s.id.split(':')[1] : s.id),
+            chain: (s.chain as SupportedChain) || chain,
+            question: s.question,
+            category: s.category ?? 'General',
+            endTime: s.endTime,
+            status: s.status as 'open' | 'closed' | 'resolved',
+            outcomes,
+            pools,
+            resolvedOutcomeIndex: resolvedOutcomeIndex ?? undefined,
+            resolvedOutcome: (s.resolvedOutcome as 'yes' | 'no' | string) || undefined,
+            updatedAt: s.updatedAt,
+          });
+        });
 
         inMemoryCache[chain] = {
           markets: dbMarkets,
@@ -505,20 +580,36 @@ markets.get('/:id', async (c) => {
       if (stored) {
         const foundChain = (stored.chain as SupportedChain) || (stored.id.startsWith('avalanche:') ? 'avalanche' : 'stellar');
         const cleanId = stored.marketId || (stored.id.includes(':') ? stored.id.split(':')[1] : stored.id);
+        let outcomes: string[] = ['YES', 'NO'];
+        let pools: number[] = [stored.yesPool ?? 0, stored.noPool ?? 0];
+        try {
+          if (typeof (stored as any).outcomes === 'string' && (stored as any).outcomes) {
+            const parsed = JSON.parse((stored as any).outcomes as string);
+            if (Array.isArray(parsed)) outcomes = parsed.map(String);
+          }
+        } catch { /* keep default */ }
+        try {
+          if (typeof (stored as any).pools === 'string' && (stored as any).pools) {
+            const parsed = JSON.parse((stored as any).pools as string);
+            if (Array.isArray(parsed)) pools = parsed.map(Number);
+          }
+        } catch { /* keep default */ }
+        const resolvedOutcomeIndex = (stored as any).resolvedOutcomeIndex as number | null | undefined ?? undefined;
 
         return c.json({
-          market: {
+          market: withBinaryCompat({
             id: cleanId,
             chain: foundChain,
             question: stored.question,
             category: stored.category ?? 'General',
             endTime: stored.endTime,
-            status: stored.status,
-            yesPool: stored.yesPool ?? 0,
-            noPool: stored.noPool ?? 0,
-            resolvedOutcome: stored.resolvedOutcome ?? undefined,
+            status: stored.status as 'open' | 'closed' | 'resolved',
+            outcomes,
+            pools,
+            resolvedOutcomeIndex: resolvedOutcomeIndex ?? undefined,
+            resolvedOutcome: (stored.resolvedOutcome as 'yes' | 'no' | string) ?? undefined,
             updatedAt: stored.updatedAt,
-          },
+          }),
           cached: true,
         });
       }
