@@ -1,7 +1,7 @@
 // storage.rs
 // Soroban contract storage helpers.
 
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
 // ---------------------------------------------------------------------------
 // Data keys
@@ -16,8 +16,8 @@ pub enum DataKey {
     MarketCount,
     /// Stores a MarketState struct keyed by market id
     Market(u32),
-    /// Stores an i128 share balance keyed by (market_id, holder_address, side)
-    /// side: 0 = YES, 1 = NO
+    /// Stores an i128 share balance keyed by (market_id, holder_address, outcome_index)
+    /// outcome_index: 0..N-1 (N=2 binary case: 0 = YES, 1 = NO)
     Shares(u32, Address, u32),
 }
 
@@ -28,12 +28,15 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarketState {
-    pub question: soroban_sdk::String,
-    pub category: soroban_sdk::String,
+    pub question: String,
+    pub category: String,
     pub end_timestamp: u64,
-    pub yes_pool: i128,
-    pub no_pool: i128,
-    /// 0 = Open, 1 = ResolvedYes, 2 = ResolvedNo
+    /// Human-readable outcome labels. N >= 2. Binary markets use ["YES", "NO"].
+    pub outcomes: Vec<String>,
+    /// Pooled stake per outcome index. Always same length as `outcomes`.
+    pub pools: Vec<i128>,
+    /// 0 = Open, otherwise winning_outcome_index + 1.
+    /// N=2 backward compat: 1 = ResolvedYes (winner 0), 2 = ResolvedNo (winner 1).
     pub status: u32,
 }
 
