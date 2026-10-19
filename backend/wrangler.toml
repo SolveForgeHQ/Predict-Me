@@ -13,3 +13,8 @@ AVALANCHE_CONTRACT_ADDRESS = "0x49835b6ad67dB224413Ef53A52cFAa19391F20AC"
 
 [observability]
 enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "predict-me-db"
+database_id = "34402d4b-3454-406f-aef4-e36aa9ae2cd8"
