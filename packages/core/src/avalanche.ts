@@ -16,6 +16,12 @@ import type {
   ClaimWinningsParams,
   TransactionResult,
 } from "@predict-me/types";
+import {
+  normalizeOutcomes,
+  validateOutcomes,
+  buildMarket,
+  buildPosition,
+} from "@predict-me/types";
 import type { PredictionMarketClient } from "./interface";
 import { PredictionMarketAbi } from "./abi/PredictionMarketAbi";
 
@@ -81,12 +87,14 @@ export class AvalancheMarketClient implements PredictionMarketClient {
         ? Math.floor(params.endTime / 1000)
         : params.endTime
     );
+    const outcomes = normalizeOutcomes(params.outcomes);
+    validateOutcomes(outcomes);
 
     const txHash = await this.walletClient.writeContract({
       address: this.contractAddress,
       abi: PredictionMarketAbi,
       functionName: "createMarket",
-      args: [params.question, endTimestampSeconds],
+      args: [params.question, endTimestampSeconds, outcomes],
       account,
       chain: this.walletClient.chain,
     });
@@ -110,6 +118,39 @@ export class AvalancheMarketClient implements PredictionMarketClient {
     return { txHash, data: marketId };
   }
 
+  private resolveLocalOutcomeIndex(params: {
+    outcomeIndex?: number;
+    outcome?: string | number;
+  }): number | null {
+    if (params.outcomeIndex !== undefined) return params.outcomeIndex;
+    const o = params.outcome;
+    if (typeof o === "number" && Number.isInteger(o) && o >= 0) return o;
+    if (typeof o === "string") {
+      const low = o.toLowerCase();
+      if (low === "yes") return 0;
+      if (low === "no") return 1;
+      const asNum = Number(o);
+      if (Number.isInteger(asNum) && asNum >= 0) return asNum;
+    }
+    return null;
+  }
+
+  private async resolveOutcomeIndex(
+    params: { outcomeIndex?: number; outcome?: string | number },
+    marketId: string,
+  ): Promise<number> {
+    const fast = this.resolveLocalOutcomeIndex(params);
+    if (fast !== null) return fast;
+    const market = await this.getMarket(marketId);
+    const outcomes = market?.outcomes ?? ["YES", "NO"];
+    const o = params.outcome;
+    if (typeof o === "string") {
+      const idx = outcomes.findIndex((l) => l.toLowerCase() === o.toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    throw new Error("Outcome index is required");
+  }
+
   async buyShares(params: BuySharesParams): Promise<TransactionResult<void>> {
     this.assertConfigured();
 
@@ -119,7 +160,7 @@ export class AvalancheMarketClient implements PredictionMarketClient {
 
     const account = this.getAccount(params.callerAddress);
     const marketIdBigInt = this.parseMarketId(params.marketId);
-    const isYes = params.outcome.toLowerCase() === "yes";
+    const outcomeIndex = await this.resolveOutcomeIndex(params, params.marketId);
     const valueWei = parseEther(params.amount.toString());
 
     if (valueWei <= BigInt(0)) {
@@ -130,7 +171,7 @@ export class AvalancheMarketClient implements PredictionMarketClient {
       address: this.contractAddress,
       abi: PredictionMarketAbi,
       functionName: "buyShares",
-      args: [marketIdBigInt, isYes],
+      args: [marketIdBigInt, BigInt(outcomeIndex)],
       value: valueWei,
       account,
       chain: this.walletClient.chain,
@@ -149,13 +190,13 @@ export class AvalancheMarketClient implements PredictionMarketClient {
 
     const account = this.getAccount(params.callerAddress);
     const marketIdBigInt = this.parseMarketId(params.marketId);
-    const outcomeBool = params.outcome.toLowerCase() === "yes";
+    const outcomeIndex = await this.resolveOutcomeIndex(params, params.marketId);
 
     const txHash = await this.walletClient.writeContract({
       address: this.contractAddress,
       abi: PredictionMarketAbi,
       functionName: "resolveMarket",
-      args: [marketIdBigInt, outcomeBool],
+      args: [marketIdBigInt, BigInt(outcomeIndex)],
       account,
       chain: this.walletClient.chain,
     });
@@ -215,26 +256,34 @@ export class AvalancheMarketClient implements PredictionMarketClient {
 
       if (!data) return null;
 
-      const rawStatus = Number(data.status);
+      const rawStatus = Number((data as any).status);
       const status: MarketStatus = rawStatus === 0 ? "open" : "resolved";
-      const resolvedOutcome = rawStatus !== 0 ? (data.outcome ? "yes" : "no") : undefined;
+      const outcomes = [...((data as any).outcomeLabels as string[])];
+      const pools = ((data as any).pools as bigint[]).map((p) => Number(formatEther(p)));
+      const totalPool = Number(formatEther((data as any).totalPool));
+      const endTime = Number((data as any).endTime) * 1000;
+      const resolvedOutcomeIndex = rawStatus === 0 ? undefined : Number((data as any).winningOutcome);
 
-      const yesPool = Number(formatEther(data.yesPool));
-      const noPool = Number(formatEther(data.noPool));
-      const totalPool = Number(formatEther(data.totalPool));
-      const endTime = Number(data.endTime) * 1000;
+      // Legacy fallback: old deployments without outcomeLabels/pools
+      if (outcomes.length === 0) {
+        const legacy = data as any;
+        if (legacy.yesPool !== undefined) {
+          outcomes.push("YES", "NO");
+          pools.push(Number(formatEther(legacy.yesPool)), Number(formatEther(legacy.noPool)));
+        }
+      }
 
-      return {
+      return buildMarket({
         id: marketId,
-        question: data.question,
+        question: (data as any).question,
         category: "General",
         endTime,
         status,
-        yesPool,
-        noPool,
+        outcomes: outcomes.length > 0 ? outcomes : ["YES", "NO"],
+        pools,
         totalPool,
-        resolvedOutcome,
-      };
+        resolvedOutcomeIndex,
+      });
     } catch {
       return null;
     }
@@ -245,21 +294,29 @@ export class AvalancheMarketClient implements PredictionMarketClient {
       const marketIdBigInt = BigInt(marketId);
       const user = userAddress as Address;
 
-      const [yesBalance, noBalance] = await this.publicClient.readContract({
+      const balancesBig = (await this.publicClient.readContract({
         address: this.contractAddress,
         abi: PredictionMarketAbi,
         functionName: "getPosition",
         args: [marketIdBigInt, user],
-      });
+      })) as bigint[] | readonly bigint[];
 
-      return {
+      // Legacy fallback: old getPosition returned (yesBalance, noBalance) tuple
+      let balances: number[];
+      if (Array.isArray(balancesBig)) {
+        balances = [...balancesBig].map((b) => Number(formatEther(b)));
+      } else {
+        const tuple = balancesBig as unknown as { yesBalance: bigint; noBalance: bigint };
+        balances = [Number(formatEther(tuple.yesBalance)), Number(formatEther(tuple.noBalance))];
+      }
+
+      return buildPosition({
         userId: userAddress,
         marketId,
-        yesShares: Number(formatEther(yesBalance)),
-        noShares: Number(formatEther(noBalance)),
+        balances,
         avgYesPrice: null,
         avgNoPrice: null,
-      };
+      });
     } catch {
       return null;
     }

@@ -6,7 +6,7 @@
 pub mod market;
 pub mod storage;
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 use storage::MarketState;
 
 #[contract]
@@ -14,18 +14,21 @@ pub struct PredictMeContract;
 
 #[contractimpl]
 impl PredictMeContract {
-    /// Create a new prediction market.
+    /// Create a new prediction market with N >= 2 outcomes.
+    /// Binary markets use outcomes ["YES", "NO"] (the N=2 case).
     /// Returns the new market's u32 id.
     pub fn create_market(
         env: Env,
         question: String,
         end_timestamp: u64,
         category: String,
+        outcomes: Vec<String>,
     ) -> u32 {
-        market::create_market(env, question, end_timestamp, category)
+        market::create_market(env, question, end_timestamp, category, outcomes)
     }
 
-    /// Buy YES (0) or NO (1) shares in a market.
+    /// Buy shares on one outcome (outcome_index 0..N-1).
+    /// N=2 case: 0 = YES, 1 = NO.
     pub fn buy_shares(
         env: Env,
         market_id: u32,
@@ -36,7 +39,8 @@ impl PredictMeContract {
         market::buy_shares(env, market_id, side, amount, caller)
     }
 
-    /// Resolve a market with its final outcome (0 = YES, 1 = NO).
+    /// Resolve a market with its winning outcome index (0..N-1).
+    /// N=2 case: 0 = YES, 1 = NO.
     pub fn resolve_market(env: Env, market_id: u32, outcome: u32) {
         market::resolve_market(env, market_id, outcome)
     }
@@ -52,8 +56,21 @@ impl PredictMeContract {
         storage::get_market(&env, market_id)
     }
 
-    /// Read a user's share balance for a given side.
+    /// Read a user's share balance for a given outcome index.
     pub fn get_shares(env: Env, market_id: u32, holder: Address, side: u32) -> i128 {
         storage::get_shares(&env, market_id, &holder, side)
     }
+
+    /// Read outcome labels for a market.
+    pub fn get_outcomes(env: Env, market_id: u32) -> Option<Vec<String>> {
+        storage::get_market(&env, market_id).map(|m| m.outcomes)
+    }
+
+    /// Read per-outcome pools for a market.
+    pub fn get_pools(env: Env, market_id: u32) -> Option<Vec<i128>> {
+        storage::get_market(&env, market_id).map(|m| m.pools)
+    }
 }
+
+#[cfg(test)]
+mod test;

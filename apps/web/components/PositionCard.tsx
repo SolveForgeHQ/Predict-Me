@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Market } from "@/lib/markets";
+import { outcomeColor, winningLabel } from "@/lib/types";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
@@ -26,10 +27,14 @@ export default function PositionCard({ market }: Props) {
   const { publicKey, connected, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { client, chain, chainMetadata } = useChain();
-  const [yesShares, setYesShares] = useState<number>(0);
-  const [noShares, setNoShares] = useState<number>(0);
+  const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];
+  const [balances, setBalances] = useState<number[]>(outcomes.map(() => 0));
   const [isLoadingPosition, setIsLoadingPosition] = useState(false);
-  const [onChainMarket, setOnChainMarket] = useState<{ status: string; outcome?: string } | null>(null);
+  const [onChainMarket, setOnChainMarket] = useState<{
+    status: string;
+    outcomeIndex?: number;
+    outcome?: string;
+  } | null>(null);
 
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -37,23 +42,20 @@ export default function PositionCard({ market }: Props) {
 
   const isPending = pendingStep !== null;
 
-  // Market is considered resolved if either static data or on-chain contract reports resolved
+  const resolvedIndex =
+    onChainMarket?.outcomeIndex ??
+    market.resolvedOutcomeIndex ??
+    (market.status === "resolved_yes" ? 0 : market.status === "resolved_no" ? 1 : undefined);
   const isResolved =
-    market.status === "resolved_yes" ||
-    market.status === "resolved_no" ||
-    onChainMarket?.status === "resolved";
-
-  const winningSide: "YES" | "NO" | null =
-    onChainMarket?.status === "resolved" && onChainMarket.outcome
-      ? (onChainMarket.outcome.toUpperCase() as "YES" | "NO")
-      : market.status === "resolved_yes"
-      ? "YES"
-      : market.status === "resolved_no"
-      ? "NO"
-      : null;
-
+    market.status !== "open" || onChainMarket?.status === "resolved";
+  const winnerLabel = isResolved
+    ? (resolvedIndex !== undefined && outcomes[resolvedIndex]) ||
+      winningLabel(market) ||
+      onChainMarket?.outcome ||
+      null
+    : null;
   const winningShares =
-    winningSide === "YES" ? yesShares : winningSide === "NO" ? noShares : 0;
+    isResolved && resolvedIndex !== undefined ? (balances[resolvedIndex] ?? 0) : 0;
   const hasWinningPosition = isResolved && winningShares > 0;
 
   const getStepLabel = (step: PendingStep): string => {
@@ -74,8 +76,7 @@ export default function PositionCard({ market }: Props) {
   // ── Load live position & market state from contract via the active chain client ───
   const loadPositionAndMarket = useCallback(async () => {
     if (!connected || !publicKey) {
-      setYesShares(0);
-      setNoShares(0);
+      setBalances(outcomes.map(() => 0));
       return;
     }
 
@@ -87,14 +88,20 @@ export default function PositionCard({ market }: Props) {
       ]);
 
       if (pos) {
-        setYesShares(pos.yesShares);
-        setNoShares(pos.noShares);
+        const b = (pos as any).balances as number[] | undefined;
+        if (Array.isArray(b) && b.length > 0) {
+          setBalances(b);
+        } else {
+          setBalances([pos.yesShares ?? 0, pos.noShares ?? 0]);
+        }
       }
 
       if (mkt) {
+        const idx = (mkt as any).resolvedOutcomeIndex as number | undefined;
         setOnChainMarket({
           status: mkt.status,
-          outcome: mkt.resolvedOutcome,
+          outcomeIndex: idx,
+          outcome: (mkt as any).resolvedOutcome,
         });
       }
     } catch (err) {
@@ -102,6 +109,7 @@ export default function PositionCard({ market }: Props) {
     } finally {
       setIsLoadingPosition(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, publicKey, market.id, client]);
 
   useEffect(() => {
@@ -143,7 +151,7 @@ export default function PositionCard({ market }: Props) {
       const payoutText =
         result.data && result.data > 0
           ? `${result.data} ${chainMetadata.currency}`
-          : `${winningShares} winning ${winningSide} shares`;
+          : `${winningShares} winning ${winnerLabel} shares`;
 
       toast.success(
         "Winnings Claimed!",
@@ -194,70 +202,53 @@ export default function PositionCard({ market }: Props) {
           )}
         </div>
 
-        {isResolved && (
+        {isResolved && winnerLabel && (
           <span
             className="text-[11px] font-bold px-2 py-0.5 rounded"
             style={{
-              backgroundColor: market.status === "resolved_yes" ? "#00D08422" : "#FF4D5E22",
-              color: market.status === "resolved_yes" ? "#00D084" : "#FF4D5E",
+              backgroundColor: `${outcomeColor(resolvedIndex ?? 0)}22`,
+              color: outcomeColor(resolvedIndex ?? 0),
             }}
           >
-            Resolved: {winningSide}
+            Resolved: {winnerLabel}
           </span>
         )}
       </div>
 
-      {/* Share balances */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        {/* YES */}
-        <div
-          className="rounded-xl p-3.5"
-          style={{
-            backgroundColor: "#0B0E14",
-            border: `1px solid ${
-              market.status === "resolved_yes" && yesShares > 0 ? "#00D08488" : "#00D08433"
-            }`,
-          }}
-        >
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-xs font-semibold" style={{ color: "#00D084" }}>
-              YES Shares
-            </p>
-            {market.status === "resolved_yes" && (
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#00D08422] text-[#00D084]">
-                WON
-              </span>
-            )}
-          </div>
-          <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>
-            {connected ? (isLoadingPosition ? "…" : yesShares) : 0}
-          </p>
-        </div>
-
-        {/* NO */}
-        <div
-          className="rounded-xl p-3.5"
-          style={{
-            backgroundColor: "#0B0E14",
-            border: `1px solid ${
-              market.status === "resolved_no" && noShares > 0 ? "#FF4D5E88" : "#FF4D5E33"
-            }`,
-          }}
-        >
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-xs font-semibold" style={{ color: "#FF4D5E" }}>
-              NO Shares
-            </p>
-            {market.status === "resolved_no" && (
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#FF4D5E22] text-[#FF4D5E]">
-                WON
-              </span>
-            )}
-          </div>
-          <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>
-            {connected ? (isLoadingPosition ? "…" : noShares) : 0}
-          </p>
-        </div>
+      {/* Share balances — grid adapts to N outcomes */}
+      <div className={`grid gap-3 mb-4 ${outcomes.length <= 2 ? "grid-cols-2" : "grid-cols-2"}`}>
+        {outcomes.map((label, i) => {
+          const color = outcomeColor(i);
+          const bal = balances[i] ?? 0;
+          const won = isResolved && resolvedIndex === i;
+          return (
+            <div
+              key={`${label}-${i}`}
+              className="rounded-xl p-3.5"
+              style={{
+                backgroundColor: "#0B0E14",
+                border: `1px solid ${won && bal > 0 ? `${color}88` : `${color}33`}`,
+              }}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs font-semibold truncate" style={{ color }} title={label}>
+                  {label}
+                </p>
+                {won && (
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: `${color}22`, color }}
+                  >
+                    WON
+                  </span>
+                )}
+              </div>
+              <p className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>
+                {connected ? (isLoadingPosition ? "…" : bal) : 0}
+              </p>
+            </div>
+          );
+        })}
       </div>
 
       {/* Claim Winnings Section */}
@@ -265,8 +256,8 @@ export default function PositionCard({ market }: Props) {
         <div className="pt-3" style={{ borderTop: "1px solid #1E2435" }}>
           <div className="flex items-center justify-between mb-3 text-xs">
             <span style={{ color: "#8B93A7" }}>Claimable Outcome:</span>
-            <span className="font-bold text-[#00D084]">
-              {winningShares} Winning {winningSide} Shares
+            <span className="font-bold" style={{ color: outcomeColor(resolvedIndex ?? 0) }}>
+              {winningShares} Winning {winnerLabel} Shares
             </span>
           </div>
 

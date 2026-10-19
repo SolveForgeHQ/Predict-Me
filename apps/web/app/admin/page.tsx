@@ -25,7 +25,8 @@ const STEP_LABEL: Record<PendingStep, string> = {
 
 interface ResolvingState {
   marketId: string;
-  outcome: "YES" | "NO";
+  outcomeIndex: number;
+  outcomeLabel: string;
   step: PendingStep;
 }
 
@@ -39,6 +40,7 @@ export default function AdminPage() {
   const [question, setQuestion] = useState("");
   const [endDate, setEndDate]   = useState("");
   const [category, setCategory] = useState("General");
+  const [outcomeInputs, setOutcomeInputs] = useState<string[]>(["YES", "NO"]);
 
   // Feedback for Create Market
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
@@ -48,7 +50,7 @@ export default function AdminPage() {
   // Feedback for Resolve Market
   const [resolvingState, setResolvingState] = useState<ResolvingState | null>(null);
   const [resolveError, setResolveError]     = useState<{ marketId: string; message: string } | null>(null);
-  const [resolveSuccess, setResolveSuccess] = useState<{ marketId: string; txHash: string; outcome: "YES" | "NO" } | null>(null);
+  const [resolveSuccess, setResolveSuccess] = useState<{ marketId: string; txHash: string; outcomeIndex: number; outcomeLabel: string } | null>(null);
 
   // On-chain owner state for Avalanche
   const [onChainOwner, setOnChainOwner] = useState<string | null>(null);
@@ -115,6 +117,16 @@ export default function AdminPage() {
     e.preventDefault();
     if (!isAdmin || !question.trim() || !endDate || isPending || isResolving) return;
 
+    const outcomes = outcomeInputs.map((o) => o.trim()).filter((o) => o.length > 0);
+    if (outcomes.length < 2) {
+      setErrorMsg("At least 2 outcomes are required.");
+      return;
+    }
+    if (outcomes.length > 8) {
+      setErrorMsg("Maximum 8 outcomes in the admin UI (contract supports up to 32).");
+      return;
+    }
+
     setErrorMsg("");
     setTxHash("");
 
@@ -143,6 +155,7 @@ export default function AdminPage() {
         question: question.trim(),
         endTime: endTimestampSec,
         category,
+        outcomes,
         callerAddress: publicKey ?? undefined,
       });
 
@@ -155,19 +168,27 @@ export default function AdminPage() {
       setTxHash(result.txHash);
       toast.success(
         "Market Created!",
-        `Market registered on-chain on ${chainMetadata.name}.`
+        `Market with ${outcomes.length} outcomes registered on-chain on ${chainMetadata.name}.`
       );
       setQuestion("");
       setEndDate("");
       setCategory("General");
+      setOutcomeInputs(["YES", "NO"]);
 
       // Optimistically add to the local list so the admin sees it immediately
       const createdId = result.data ?? result.txHash;
+      const n = outcomes.length;
+      const even = Math.round(100 / n);
+      const outcomePercents = Array.from({ length: n }, () => even);
+      outcomePercents[n - 1] += 100 - outcomePercents.reduce((a, b) => a + b, 0);
       const newMarket: Market = {
         id: createdId,
         question: question.trim(),
-        yesPercent: 50,
-        noPercent: 50,
+        outcomes: [...outcomes],
+        outcomePercents,
+        outcomePools: outcomes.map(() => 0),
+        yesPercent: n === 2 ? outcomePercents[0] : 50,
+        noPercent: n === 2 ? outcomePercents[1] : 50,
         totalPool: 0,
         endsAt: new Date(endDate).toISOString(),
         status: "open",
@@ -189,15 +210,17 @@ export default function AdminPage() {
   };
 
   // ── Resolve market ─────────────────────────────────────────
-  const handleResolve = async (marketId: string, outcome: "YES" | "NO") => {
+  const handleResolve = async (marketId: string, outcomeIndex: number) => {
     if (isWrongNetwork) {
       await switchNetwork();
       return;
     }
 
+    const target = markets.find((m) => m.id === marketId);
+    const outcomeLabel = target?.outcomes[outcomeIndex] ?? `Outcome ${outcomeIndex + 1}`;
     setResolveError(null);
     setResolveSuccess(null);
-    setResolvingState({ marketId, outcome, step: "simulating" });
+    setResolvingState({ marketId, outcomeIndex, outcomeLabel, step: "simulating" });
 
     try {
       await new Promise((r) => setTimeout(r, 0));
@@ -216,7 +239,7 @@ export default function AdminPage() {
 
       const callPromise = client.resolveMarket({
         marketId,
-        outcome: outcome.toLowerCase() as "yes" | "no",
+        winningOutcomeIndex: outcomeIndex,
         callerAddress: publicKey ?? undefined,
       });
 
@@ -226,13 +249,19 @@ export default function AdminPage() {
       clearTimeout(submittingTimer);
       clearTimeout(confirmingTimer);
 
-      setResolveSuccess({ marketId, txHash: result.txHash, outcome });
-      toast.success("Market Resolved!", `Market resolved ${outcome} on ${chainMetadata.name}.`);
+      setResolveSuccess({ marketId, txHash: result.txHash, outcomeIndex, outcomeLabel });
+      toast.success("Market Resolved!", `Market resolved to ${outcomeLabel} on ${chainMetadata.name}.`);
 
       // Update market status in UI once confirmed on-chain
-      const newStatus = outcome === "YES" ? "resolved_yes" : "resolved_no";
       setMarkets((prev) =>
-        prev.map((m) => (m.id === marketId ? { ...m, status: newStatus } : m))
+        prev.map((m) => {
+          if (m.id !== marketId) return m;
+          const n = m.outcomes.length;
+          const status = n === 2
+            ? (outcomeIndex === 0 ? "resolved_yes" : "resolved_no")
+            : "resolved";
+          return { ...m, status, resolvedOutcomeIndex: outcomeIndex };
+        })
       );
     } catch (err) {
       const message = parseTransactionError(err, {
@@ -470,6 +499,65 @@ export default function AdminPage() {
               </select>
             </div>
 
+            {/* Outcomes (2–8) */}
+            <div>
+              <label
+                className="block text-xs font-semibold mb-2 uppercase tracking-wider"
+                style={{ color: "#8B93A7" }}
+              >
+                Outcomes ({outcomeInputs.length})
+              </label>
+              <div className="flex flex-col gap-2">
+                {outcomeInputs.map((value, i) => (
+                  <div key={i} className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder={i === 0 ? "e.g. YES" : i === 1 ? "e.g. NO" : `Outcome ${i + 1}`}
+                      value={value}
+                      onChange={(e) => {
+                        const next = [...outcomeInputs];
+                        next[i] = e.target.value;
+                        setOutcomeInputs(next);
+                      }}
+                      disabled={isPending || isResolving}
+                      className="flex-1 rounded-xl py-2.5 px-4 text-sm outline-none disabled:opacity-50"
+                      style={{
+                        backgroundColor: "#0B0E14",
+                        border: "1px solid #1E2435",
+                        color: "#F2F4F7",
+                      }}
+                    />
+                    {outcomeInputs.length > 2 && (
+                      <button
+                        type="button"
+                        onClick={() => setOutcomeInputs(outcomeInputs.filter((_, j) => j !== i))}
+                        disabled={isPending || isResolving}
+                        className="px-3 rounded-xl text-sm font-bold disabled:opacity-50"
+                        style={{ backgroundColor: "#1E2435", color: "#FF4D5E" }}
+                        title="Remove outcome"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {outcomeInputs.length < 8 && (
+                <button
+                  type="button"
+                  onClick={() => setOutcomeInputs([...outcomeInputs, `Outcome ${outcomeInputs.length + 1}`])}
+                  disabled={isPending || isResolving}
+                  className="mt-2 text-xs font-bold px-3 py-1.5 rounded-lg disabled:opacity-50"
+                  style={{ backgroundColor: "#1E2435", color: "#8B93A7" }}
+                >
+                  + Add outcome
+                </button>
+              )}
+              <p className="text-[11px] mt-1.5" style={{ color: "#2A3347" }}>
+                Binary markets use YES / NO. Add more for multi-outcome (e.g. candidates).
+              </p>
+            </div>
+
             {/* Resolution date */}
             <div>
               <label
@@ -595,16 +683,18 @@ export default function AdminPage() {
                         style={
                           market.status === "open"
                             ? { backgroundColor: "#00D08418", color: "#00D084" }
-                            : market.status === "resolved_yes"
-                            ? { backgroundColor: "#00D08418", color: "#00D084" }
-                            : { backgroundColor: "#FF4D5E18", color: "#FF4D5E" }
+                            : { backgroundColor: "#8B93A733", color: "#F2F4F7" }
                         }
                       >
                         {market.status === "open"
                           ? "OPEN"
+                          : market.resolvedOutcomeIndex !== undefined && market.outcomes[market.resolvedOutcomeIndex]
+                          ? `${market.outcomes[market.resolvedOutcomeIndex]} (RESOLVED)`
                           : market.status === "resolved_yes"
                           ? "YES (RESOLVED)"
-                          : "NO (RESOLVED)"}
+                          : market.status === "resolved_no"
+                          ? "NO (RESOLVED)"
+                          : "RESOLVED"}
                       </span>
                       <span className="text-xs" style={{ color: "#8B93A7" }}>
                         {formatPool(market.totalPool)} · {timeRemaining(market.endsAt)}
@@ -616,57 +706,40 @@ export default function AdminPage() {
                   </div>
 
                   {market.status === "open" && (
-                    <div className="flex gap-2 shrink-0 items-center">
-                      <button
-                        onClick={() => handleResolve(market.id, "YES")}
-                        disabled={isResolving || isPending}
-                        className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{
-                          backgroundColor: "#00D08422",
-                          color: "#00D084",
-                          border: "1px solid #00D08433",
-                        }}
-                      >
-                        {isThisResolving && resolvingState?.outcome === "YES" ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin" />
-                            {resolvingState.step === "signing"
-                              ? "Sign…"
-                              : resolvingState.step === "submitting"
-                              ? "Broadcasting…"
-                              : resolvingState.step === "confirming"
-                              ? "Confirming…"
-                              : "Simulating…"}
-                          </>
-                        ) : (
-                          "Resolve YES"
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleResolve(market.id, "NO")}
-                        disabled={isResolving || isPending}
-                        className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{
-                          backgroundColor: "#FF4D5E22",
-                          color: "#FF4D5E",
-                          border: "1px solid #FF4D5E33",
-                        }}
-                      >
-                        {isThisResolving && resolvingState?.outcome === "NO" ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin" />
-                            {resolvingState.step === "signing"
-                              ? "Sign…"
-                              : resolvingState.step === "submitting"
-                              ? "Broadcasting…"
-                              : resolvingState.step === "confirming"
-                              ? "Confirming…"
-                              : "Simulating…"}
-                          </>
-                        ) : (
-                          "Resolve NO"
-                        )}
-                      </button>
+                    <div className="flex gap-2 shrink-0 items-center flex-wrap">
+                      {(market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"]).map((label, i) => {
+                        const resolvingThis = isThisResolving && resolvingState?.outcomeIndex === i;
+                        const color = i % 2 === 0 ? "#00D084" : "#FF4D5E";
+                        return (
+                          <button
+                            key={`${label}-${i}`}
+                            onClick={() => handleResolve(market.id, i)}
+                            disabled={isResolving || isPending}
+                            title={`Resolve to ${label}`}
+                            className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed max-w-40 truncate"
+                            style={{
+                              backgroundColor: `${color}22`,
+                              color,
+                              border: `1px solid ${color}33`,
+                            }}
+                          >
+                            {resolvingThis ? (
+                              <>
+                                <Loader2 size={12} className="animate-spin" />
+                                {resolvingState.step === "signing"
+                                  ? "Sign…"
+                                  : resolvingState.step === "submitting"
+                                  ? "Broadcasting…"
+                                  : resolvingState.step === "confirming"
+                                  ? "Confirming…"
+                                  : "Simulating…"}
+                              </>
+                            ) : (
+                              `Resolve ${label}`
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -687,7 +760,7 @@ export default function AdminPage() {
                   <div className="mt-3">
                     <StatusBanner
                       variant="success"
-                      title={`Market resolved ${resolveSuccess.outcome} on-chain!`}
+                      title={`Market resolved to ${resolveSuccess.outcomeLabel} on-chain!`}
                       txHash={resolveSuccess.txHash}
                     />
                   </div>

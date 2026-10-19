@@ -18,14 +18,9 @@ import "../src/PredictionMarket.sol";
  */
 contract DeployPredictionMarket is Script {
     function run() external returns (PredictionMarket) {
-        // Read private key from environment variables (supports PRIVATE_KEY or DEPLOYER_PRIVATE_KEY)
-        uint256 deployerPrivateKey;
-        bytes memory pkBytes = vm.envOr("PRIVATE_KEY", bytes(""));
-        if (pkBytes.length > 0) {
-            deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        } else {
-            deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        }
+        // Read private key from environment (supports PRIVATE_KEY or DEPLOYER_PRIVATE_KEY,
+        // with or without 0x prefix — see .env.example).
+        uint256 deployerPrivateKey = _readPrivateKey();
 
         address deployerAddress = vm.addr(deployerPrivateKey);
 
@@ -50,5 +45,19 @@ contract DeployPredictionMarket is Script {
         console.log("==================================================\n");
 
         return predictionMarket;
+    }
+
+    /// @dev Reads PRIVATE_KEY (fallback DEPLOYER_PRIVATE_KEY), accepting hex
+    ///      with or without the 0x prefix.
+    function _readPrivateKey() internal returns (uint256) {
+        string memory pk = vm.envOr("PRIVATE_KEY", string(""));
+        if (bytes(pk).length == 0) {
+            pk = vm.envString("DEPLOYER_PRIVATE_KEY");
+        }
+        bytes memory b = bytes(pk);
+        if (b.length >= 2 && b[0] == bytes1("0") && (b[1] == bytes1("x") || b[1] == bytes1("X"))) {
+            return vm.parseUint(pk);
+        }
+        return vm.parseUint(string.concat("0x", pk));
     }
 }

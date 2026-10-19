@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { MARKETS, getMarket, formatPool, timeRemaining } from "@/lib/markets";
+import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
 
@@ -22,9 +23,17 @@ export default async function MarketPage({ params }: Props) {
   const market = getMarket(id);
   if (!market) notFound();
 
+  const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];
+  const percents = market.outcomePercents.length === outcomes.length
+    ? market.outcomePercents
+    : outcomes.map(() => Math.round(100 / outcomes.length));
+  const pools = market.outcomePools && market.outcomePools.length === outcomes.length
+    ? market.outcomePools
+    : outcomes.map((_, i) => Math.round((market.totalPool * (percents[i] ?? 0)) / 100));
+  const winner = winningLabel(market);
+  const isBinary = outcomes.length === 2;
+
   const catColor = CATEGORY_COLORS[market.category] ?? "#8B93A7";
-  const yesPool = formatPool(Math.round((market.totalPool * market.yesPercent) / 100));
-  const noPool  = formatPool(Math.round((market.totalPool * market.noPercent)  / 100));
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
@@ -48,7 +57,7 @@ export default async function MarketPage({ params }: Props) {
           className="inline-block text-xs font-semibold px-2.5 py-1 rounded-full mb-4"
           style={{ backgroundColor: catColor + "22", color: catColor }}
         >
-          {market.category}
+          {market.category} · {outcomes.length} outcomes
         </span>
 
         {/* Large question — the page headline */}
@@ -63,7 +72,7 @@ export default async function MarketPage({ params }: Props) {
           {market.question}
         </h1>
 
-        {/* ── ODDS BAR — visual centrepiece ──────────────────── */}
+        {/* ── ODDS BAR — N outcomes, wraps cleanly ────────────── */}
         <div
           className="rounded-3xl p-6 sm:p-8"
           style={{
@@ -73,69 +82,55 @@ export default async function MarketPage({ params }: Props) {
           }}
         >
           {/* Percentage labels */}
-          <div className="flex justify-between items-end mb-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: "#00D084" }}>
-                YES
-              </p>
-              <p
-                className="text-4xl sm:text-5xl font-extrabold"
-                style={{ color: "#00D084", textShadow: "0 0 32px rgba(0,208,132,0.5)" }}
-              >
-                {market.yesPercent}%
-              </p>
-            </div>
-            <div className="text-center px-4">
-              <p className="text-xs" style={{ color: "#8B93A7" }}>vs</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: "#FF4D5E" }}>
-                NO
-              </p>
-              <p
-                className="text-4xl sm:text-5xl font-extrabold"
-                style={{ color: "#FF4D5E", textShadow: "0 0 32px rgba(255,77,94,0.5)" }}
-              >
-                {market.noPercent}%
-              </p>
-            </div>
+          <div className={`grid gap-4 mb-4 ${isBinary ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
+            {outcomes.map((label, i) => {
+              const color = outcomeColor(i);
+              const won = market.status !== "open" && market.resolvedOutcomeIndex === i;
+              return (
+                <div key={`${label}-${i}`} className={isBinary && i === 1 ? "text-right" : ""}>
+                  <p
+                    className="text-xs font-semibold uppercase tracking-widest mb-1 truncate"
+                    style={{ color }}
+                    title={label}
+                  >
+                    {label}{won ? " · WON" : ""}
+                  </p>
+                  <p
+                    className="text-4xl sm:text-5xl font-extrabold"
+                    style={{ color, textShadow: `0 0 32px ${color}80` }}
+                  >
+                    {percents[i]}%
+                  </p>
+                  <p className="text-xs mt-1" style={{ color: "#8B93A7" }}>
+                    Pool: <strong style={{ color: "#F2F4F7" }}>{formatPool(pools[i] ?? 0)}</strong>
+                  </p>
+                </div>
+              );
+            })}
           </div>
 
-          {/* The bar itself — tall and prominent */}
+          {/* The stacked bar — N segments */}
           <div
-            className="relative h-7 rounded-full overflow-hidden flex mb-4"
+            className="relative h-7 rounded-full overflow-hidden flex mb-2"
             style={{
               backgroundColor: "#0B0E14",
               boxShadow: "inset 0 2px 6px rgba(0,0,0,0.5)",
             }}
           >
-            <div
-              className="h-full transition-all duration-700"
-              style={{
-                width: `${market.yesPercent}%`,
-                background: "linear-gradient(90deg, #00D084, #00B574)",
-                boxShadow: "2px 0 12px rgba(0,208,132,0.4)",
-              }}
-            />
-            <div
-              className="h-full flex-1"
-              style={{
-                background: "linear-gradient(90deg, #FF4D5E88, #FF4D5E)",
-              }}
-            />
+            {percents.map((p, i) => (
+              <div
+                key={i}
+                className="h-full transition-all duration-700"
+                style={{ width: `${p}%`, backgroundColor: outcomeColor(i) }}
+                title={`${outcomes[i]} ${p}%`}
+              />
+            ))}
           </div>
-
-          {/* Pool sub-labels */}
-          <div className="flex justify-between text-xs" style={{ color: "#8B93A7" }}>
-            <span>
-              Pool:{" "}
-              <strong style={{ color: "#F2F4F7" }}>{yesPool}</strong>
-            </span>
-            <span>
-              Pool:{" "}
-              <strong style={{ color: "#F2F4F7" }}>{noPool}</strong>
-            </span>
-          </div>
+          {winner && (
+            <p className="text-xs mt-2" style={{ color: "#8B93A7" }}>
+              Resolved: <strong style={{ color: outcomeColor(market.resolvedOutcomeIndex ?? 0) }}>{winner}</strong>
+            </p>
+          )}
         </div>
       </div>
 
@@ -204,13 +199,10 @@ export default async function MarketPage({ params }: Props) {
               <p
                 className="text-xl font-extrabold"
                 style={{
-                  color: market.status === "open" ? "#00D084" : "#FF4D5E",
-                  textShadow: market.status === "open"
-                    ? "0 0 16px rgba(0,208,132,0.4)"
-                    : "0 0 16px rgba(255,77,94,0.4)",
+                  color: market.status === "open" ? "#00D084" : outcomeColor(market.resolvedOutcomeIndex ?? 0),
                 }}
               >
-                {market.status === "open" ? "Open" : market.status === "resolved_yes" ? "YES" : "NO"}
+                {market.status === "open" ? "Open" : (winner ?? "Resolved")}
               </p>
             </div>
           </div>
