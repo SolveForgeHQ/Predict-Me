@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { MARKETS, getMarket, formatPool, timeRemaining } from "@/lib/markets";
+import { MARKETS, getMarket, formatPool, timeRemaining, loadMarketsWithSource, mapBackendMarket } from "@/lib/markets";
 import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
@@ -13,6 +13,11 @@ export function generateStaticParams() {
   return MARKETS.map((m) => ({ id: m.id }));
 }
 
+// Allow on-demand rendering for IDs not in generateStaticParams (live chain markets)
+export const dynamicParams = true;
+// Revalidate every 15 seconds so live market data stays fresh
+export const revalidate = 15;
+
 const CATEGORY_COLORS: Record<string, string> = {
   Sports: "#3B82F6", Crypto: "#F59E0B", Finance: "#8B5CF6",
   Tech: "#06B6D4", General: "#8B93A7",
@@ -20,7 +25,42 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export default async function MarketPage({ params }: Props) {
   const { id } = await params;
-  const market = getMarket(id);
+
+  // 1. Try mock data first (fast, no network)
+  let market = getMarket(id);
+
+  // 2. If not found in mocks, fetch all live markets and find by id
+  //    This covers Sonic and any other chain that deploys new markets
+  if (!market) {
+    try {
+      const { apiFetch } = await import("@/lib/api");
+      // Try backend by id first (fastest)
+      for (const chain of ["sonic", "avalanche", "stellar"]) {
+        try {
+          const data = await apiFetch<{ market?: any }>(`/markets/${id}?chain=${chain}`);
+          if (data?.market) {
+            market = mapBackendMarket(data.market);
+            break;
+          }
+        } catch {
+          // Try next chain
+        }
+      }
+    } catch {
+      // Backend unavailable — fall through to chain fallback
+    }
+  }
+
+  // 3. If still not found, try loading all live markets and find by id
+  if (!market) {
+    try {
+      const { markets: liveMarkets } = await loadMarketsWithSource();
+      market = liveMarkets.find((m) => m.id === id);
+    } catch {
+      // Nothing we can do
+    }
+  }
+
   if (!market) notFound();
 
   const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];

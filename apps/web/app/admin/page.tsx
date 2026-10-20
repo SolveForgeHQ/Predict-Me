@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
+import { Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
@@ -34,7 +34,7 @@ export default function AdminPage() {
   const { publicKey, connected, connecting, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { chain, chainMetadata, client } = useChain();
-  const [markets, setMarkets] = useState<Market[]>(MARKETS);
+  const [markets, setMarkets] = useState<Market[]>([]);
 
   // Form fields
   const [question, setQuestion] = useState("");
