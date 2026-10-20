@@ -7,7 +7,7 @@ const app = new Hono();
 
 // Allow requests from the Next.js dev server and any deployed frontend
 app.use('*', cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', '*'],
+  origin: '*',
   allowMethods: ['GET', 'POST', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
