@@ -10,6 +10,8 @@ A multi-chain prediction market dApp built on **Stellar (Soroban)** and **Avalan
 |---|---|---|
 | **Stellar Testnet** | Soroban Prediction Market | `CCGM6LQRQNQGMUXMXHICCH73CDBYOTMV5LEJ7JWWXUBXLRFZJCPAHHXI` |
 | **Avalanche Fuji** | Solidity Prediction Market | `0x49835b6ad67dB224413Ef53A52cFAa19391F20AC` |
+| **Sonic Testnet** | ERC-20 Prediction Market | `0x25D035CB295d94A073107aAB9Ac86a3655a5614E` |
+| **Sonic Testnet** | Mock USDC (test token) | `0x96Ef7Fb36E31445920EFC305Cc0D9C0288af7D02` |
 
 ---
 
@@ -21,7 +23,7 @@ A multi-chain prediction market dApp built on **Stellar (Soroban)** and **Avalan
 | Frontend | Next.js 16 (App Router), TailwindCSS v4 |
 | Stellar integration | `@stellar/stellar-sdk` v16, `@creit.tech/stellar-wallets-kit` (Freighter) |
 | EVM integration | Viem, Wagmi, RainbowKit |
-| Smart Contracts | Soroban SDK v25 (Rust, `wasm32v1-none`) & Solidity (Foundry) |
+| Smart Contracts | Soroban SDK v25 (Rust, `wasm32v1-none`), Solidity/Foundry (Avalanche & Sonic) |
 | Backend | Cloudflare Workers (Hono + D1 SQLite cache) |
 
 ---
@@ -53,6 +55,11 @@ A multi-chain prediction market dApp built on **Stellar (Soroban)** and **Avalan
 
    NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS=0x49835b6ad67dB224413Ef53A52cFAa19391F20AC
    NEXT_PUBLIC_AVALANCHE_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc
+
+   NEXT_PUBLIC_SONIC_CONTRACT_ADDRESS=0x25D035CB295d94A073107aAB9Ac86a3655a5614E
+   NEXT_PUBLIC_SONIC_TOKEN_ADDRESS=0x96Ef7Fb36E31445920EFC305Cc0D9C0288af7D02
+   NEXT_PUBLIC_SONIC_RPC_URL=https://rpc.testnet.soniclabs.com
+
    NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8787
    ```
 
@@ -73,13 +80,15 @@ predict-me/
 ├── backend/                 # Cloudflare Workers cache API (Hono + D1)
 ├── blockchain/
 │   ├── stellar/contracts/   # Soroban smart contract package (`predict-me`)
-│   └── avalanche/contracts/ # Avalanche Fuji smart contracts
+│   ├── avalanche/contracts/ # Avalanche Fuji smart contracts (Solidity/Foundry)
+│   └── sonic/contracts/     # Sonic Testnet ERC-20 market contracts (Solidity/Foundry)
 ├── packages/
 │   ├── core/                # Shared Stellar & EVM contract clients
 │   └── types/               # Shared TypeScript schemas & interfaces
 └── docs/
     ├── stellar.md           # Stellar testnet deployment & test guide
-    └── avalanche.md         # Avalanche testnet deployment guide
+    ├── avalanche.md         # Avalanche testnet deployment guide
+    └── sonic.md             # Sonic testnet deployment guide
 ```
 
 ---
