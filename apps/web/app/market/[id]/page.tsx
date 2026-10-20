@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { MARKETS, getMarket, formatPool, timeRemaining, loadMarketsWithSource, mapBackendMarket } from "@/lib/markets";
+import { MARKETS, getMarket, formatPool, timeRemaining, loadMarketsWithSource, mapBackendMarket, type Market } from "@/lib/markets";
 import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
@@ -26,18 +26,14 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default async function MarketPage({ params }: Props) {
   const { id } = await params;
 
-  // 1. Try mock data first (fast, no network)
-  let market = getMarket(id);
+  let market = undefined as Market | undefined;
 
-  // 2. If not found in mocks, fetch all live markets and find by id
-  //    This covers Sonic and any other chain that deploys new markets
-  if (!market) {
-    try {
-      const { apiFetch } = await import("@/lib/api");
-      // Try backend by id first (fastest)
-      for (const chain of ["sonic", "avalanche", "stellar"]) {
-        try {
-          const data = await apiFetch<{ market?: any }>(`/markets/${id}?chain=${chain}`);
+  // 1. Try backend by id across all chains (authoritative source)
+  try {
+    const { apiFetch } = await import("@/lib/api");
+    for (const chain of ["sonic", "avalanche", "stellar"]) {
+      try {
+        const data = await apiFetch<{ market?: any }>(`/markets/${id}?chain=${chain}`);
           if (data?.market) {
             market = mapBackendMarket(data.market);
             break;
@@ -49,9 +45,8 @@ export default async function MarketPage({ params }: Props) {
     } catch {
       // Backend unavailable — fall through to chain fallback
     }
-  }
 
-  // 3. If still not found, try loading all live markets and find by id
+  // 2. If still not found, try loading all live markets and find by id
   if (!market) {
     try {
       const { markets: liveMarkets } = await loadMarketsWithSource();
@@ -59,6 +54,11 @@ export default async function MarketPage({ params }: Props) {
     } catch {
       // Nothing we can do
     }
+  }
+
+  // 3. Fall back to mock data as last resort
+  if (!market) {
+    market = getMarket(id);
   }
 
   if (!market) notFound();

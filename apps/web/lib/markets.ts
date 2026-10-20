@@ -165,8 +165,8 @@ export async function loadMarketsWithSource(chain?: string): Promise<MarketLoadR
     console.warn("Direct contract fetch failed, using fallback markets:", chainErr);
   }
 
-  // 3. Baseline mock fallback
-  return { markets: MARKETS, source: "fallback" };
+  // 3. Return empty — never fall back to mock data in production
+  return { markets: [], source: "fallback" };
 }
 
 /**

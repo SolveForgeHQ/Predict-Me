@@ -35,6 +35,28 @@ export default function AdminPage() {
   const toast = useToast();
   const { chain, chainMetadata, client } = useChain();
   const [markets, setMarkets] = useState<Market[]>([]);
+  const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
+
+  // Load existing markets from the backend when the admin page mounts or chain changes
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchMarkets() {
+      setIsLoadingMarkets(true);
+      try {
+        const { loadMarketsWithSource } = await import("@/lib/markets");
+        const res = await loadMarketsWithSource(chain);
+        if (!cancelled && res.markets.length > 0) {
+          setMarkets(res.markets);
+        }
+      } catch {
+        // Silently ignore — admin can still create new markets
+      } finally {
+        if (!cancelled) setIsLoadingMarkets(false);
+      }
+    }
+    fetchMarkets();
+    return () => { cancelled = true; };
+  }, [chain]);
 
   // Form fields
   const [question, setQuestion] = useState("");
@@ -723,11 +745,25 @@ export default function AdminPage() {
             className="text-xs font-semibold px-2 py-0.5 rounded-full"
             style={{ backgroundColor: "#1E2435", color: "#8B93A7" }}
           >
-            {markets.length}
+            {isLoadingMarkets ? "…" : markets.length}
           </span>
+          {isLoadingMarkets && (
+            <Loader2 size={13} className="animate-spin" style={{ color: "#8B93A7" }} />
+          )}
         </div>
 
-        <div className="flex flex-col gap-3">
+        {isLoadingMarkets && markets.length === 0 ? (
+          <div className="flex flex-col gap-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="rounded-xl h-16 animate-pulse"
+                style={{ backgroundColor: "#111620", border: "1px solid #1E2435" }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
           {markets.map((market) => {
             const isThisResolving = resolvingState?.marketId === market.id;
             const hasError = resolveError?.marketId === market.id;
@@ -886,7 +922,8 @@ export default function AdminPage() {
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
