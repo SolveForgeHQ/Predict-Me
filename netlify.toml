@@ -1,6 +1,6 @@
 [build]
   command = "pnpm --filter web build"
-  publish = ".next"
+  publish = "apps/web/.next"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
