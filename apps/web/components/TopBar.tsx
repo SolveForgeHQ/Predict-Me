@@ -38,6 +38,8 @@ export default function TopBar() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isAvalanche = chain === "avalanche";
+  const isSonic = chain === "sonic";
+  const isEvm = isAvalanche || isSonic;
 
   // Check if connected address is admin/owner
   useEffect(() => {
@@ -46,16 +48,20 @@ export default function TopBar() {
       return;
     }
 
-    const envAdmin = isAvalanche
-      ? (process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ?? process.env.NEXT_PUBLIC_ADMIN_ADDRESS)
-      : (process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ?? process.env.NEXT_PUBLIC_ADMIN_ADDRESS ?? "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
+    const envAdmin = isEvm
+      ? (process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ??
+         process.env.NEXT_PUBLIC_SONIC_ADMIN_ADDRESS ??
+         process.env.NEXT_PUBLIC_ADMIN_ADDRESS)
+      : (process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ??
+         process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
+         "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
 
     if (envAdmin && publicKey.toLowerCase() === envAdmin.toLowerCase()) {
       setIsAdmin(true);
       return;
     }
 
-    if (isAvalanche && client.getOwner) {
+    if (isEvm && client.getOwner) {
       client.getOwner()
         .then((owner: string | null) => {
           if (owner && publicKey.toLowerCase() === owner.toLowerCase()) {
@@ -68,7 +74,7 @@ export default function TopBar() {
     } else {
       setIsAdmin(false);
     }
-  }, [connected, publicKey, isAvalanche, client]);
+  }, [connected, publicKey, isEvm, client]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -145,10 +151,10 @@ export default function TopBar() {
             <div className="relative" ref={dropdownRef}>
             {connected && publicKey ? (
               isWrongNetwork ? (
-                // Connected but on wrong EVM chain — prompt to switch network
+                  // Connected but on wrong EVM chain — prompt to switch network
                 <button
                   onClick={switchNetwork}
-                  title="Wrong network selected. Click to switch to Avalanche Fuji."
+                  title={`Wrong network selected. Click to switch to ${chainMetadata.name}.`}
                   className="text-xs font-bold px-3 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-1.5 cursor-pointer"
                   style={{
                     borderColor: "#E84142",
@@ -158,7 +164,7 @@ export default function TopBar() {
                   }}
                 >
                   <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                  Switch to Fuji
+                  Switch to {chainMetadata.shortName}
                 </button>
               ) : (
                 // Connected — show truncated address with dropdown
@@ -249,8 +255,8 @@ export default function TopBar() {
                   {copied ? "Copied!" : "Copy address"}
                 </button>
 
-                {/* RainbowKit Account Details Modal (Avalanche only) */}
-                {isAvalanche && openAccountModal && (
+                {/* RainbowKit Account Details Modal (EVM chains only) */}
+                {isEvm && openAccountModal && (
                   <button
                     onClick={() => {
                       setDropdownOpen(false);
