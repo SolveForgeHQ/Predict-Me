@@ -15,6 +15,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       stellar: ${{ steps.filter.outputs.stellar }}
       avalanche: ${{ steps.filter.outputs.avalanche }}
+      sonic: ${{ steps.filter.outputs.sonic }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -37,6 +38,8 @@ jobs:
               - 'blockchain/stellar/**'
             avalanche:
               - 'blockchain/avalanche/**'
+            sonic:
+              - 'blockchain/sonic/**'
 
   web:
     name: Web CI (Next.js)
@@ -98,3 +101,18 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
       - name: Run Foundry Build
         run: cd blockchain/avalanche/contracts && forge build
+
+  sonic:
+    name: Sonic Foundry CI
+    needs: changes
+    if: needs.changes.outputs.sonic == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Build
+        run: cd blockchain/sonic/contracts && forge build
+      - name: Test
+        run: cd blockchain/sonic/contracts && forge test -vv
