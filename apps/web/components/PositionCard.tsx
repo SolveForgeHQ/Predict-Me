@@ -277,9 +277,10 @@ export default function PositionCard({ market }: Props) {
 
   // ── Check if cancel-unresolved is available (closeTime + grace period passed) ──
   const endsAtMs = new Date(market.endsAt).getTime();
-  const isPastCloseTime = Date.now() >= endsAtMs;
+  const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — matches contract resolutionGracePeriod
+  const isPastGracePeriod = Date.now() >= endsAtMs + GRACE_PERIOD_MS;
   const canCancelUnresolved =
-    isSonic && isPastCloseTime && market.status === "open" && connected;
+    isSonic && isPastGracePeriod && market.status === "open" && connected;
 
   return (
     <div
