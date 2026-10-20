@@ -23,9 +23,10 @@ import {
 } from "@/lib/wallet";
 import { loginWithWallet } from "@/lib/auth";
 import { clearSessionToken } from "@/lib/api";
-import { useChain } from "@/context/ChainContext";
+import { useChain, CHAIN_METADATA } from "@/context/ChainContext";
 import { useAccount, useDisconnect, useSwitchChain } from "wagmi";
 import { avalancheFuji } from "viem/chains";
+import { sonicTestnet } from "@predict-me/core";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 
 // ── Context shape ────────────────────────────────────────────
@@ -127,40 +128,50 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // ── Chain-Aware Dispatch ──
   const isAvalanche = chain === "avalanche";
-  const targetChainName = isAvalanche ? "Avalanche Fuji" : "Stellar Testnet";
+  const isSonic = chain === "sonic";
+  const isEvm = isAvalanche || isSonic;
+  const targetChainName = isAvalanche
+    ? "Avalanche Fuji"
+    : isSonic
+    ? "Sonic Testnet"
+    : "Stellar Testnet";
+
+  // Determine the expected wagmi chain ID for the active chain
+  const expectedEvmChainId = CHAIN_METADATA[chain].evmChainId;
 
   const isWrongNetwork = Boolean(
-    isAvalanche &&
+    isEvm &&
     isEvmConnected &&
     chainId !== undefined &&
-    chainId !== avalancheFuji.id
+    expectedEvmChainId !== undefined &&
+    chainId !== expectedEvmChainId
   );
 
   const switchNetwork = useCallback(async () => {
-    if (isAvalanche && switchChainAsync) {
+    if (isEvm && switchChainAsync && expectedEvmChainId !== undefined) {
       try {
-        await switchChainAsync({ chainId: avalancheFuji.id });
+        await switchChainAsync({ chainId: expectedEvmChainId });
       } catch (err) {
         console.warn("Failed to switch network:", err);
       }
     }
-  }, [isAvalanche, switchChainAsync]);
+  }, [isEvm, switchChainAsync, expectedEvmChainId]);
 
-  const publicKey = isAvalanche
+  const publicKey = isEvm
     ? (evmAddress ?? null)
     : stellarPublicKey;
 
-  const connected = isAvalanche
+  const connected = isEvm
     ? Boolean(isEvmConnected && evmAddress)
     : Boolean(stellarPublicKey);
 
   // Spinner only shows when the user explicitly opened the connect modal.
-  const connecting = isAvalanche
+  const connecting = isEvm
     ? userInitiatedEvmConnect
     : stellarConnecting;
 
   const connect = useCallback(async () => {
-    if (isAvalanche) {
+    if (isEvm) {
       if (openConnectModal) {
         setUserInitiatedEvmConnect(true);
         openConnectModal();
@@ -168,10 +179,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } else {
       await connectStellar();
     }
-  }, [isAvalanche, openConnectModal, connectStellar]);
+  }, [isEvm, openConnectModal, connectStellar]);
 
   const disconnect = useCallback(async () => {
-    if (isAvalanche) {
+    if (isEvm) {
       try {
         await disconnectEvm();
       } catch (err) {
@@ -180,7 +191,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } else {
       await disconnectStellar();
     }
-  }, [isAvalanche, disconnectEvm, disconnectStellar]);
+  }, [isEvm, disconnectEvm, disconnectStellar]);
 
   // Don't render children until we've attempted session restore
   if (restoringStellar) {

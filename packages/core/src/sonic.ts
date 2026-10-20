@@ -90,6 +90,15 @@ const ERC20_ABI = [
     outputs: [{ name: "", type: "bool", internalType: "bool" }],
     stateMutability: "nonpayable",
   },
+  {
+    type: "function",
+    name: "balanceOf",
+    inputs: [
+      { name: "account", type: "address", internalType: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+    stateMutability: "view",
+  },
 ] as const;
 
 // ── Config & Client ─────────────────────────────────────────────
@@ -614,5 +623,81 @@ export class SonicMarketClient implements PredictionMarketClient {
     } catch {
       return 0;
     }
+  }
+
+  // ── Test token helpers ───────────────────────────────────────
+
+  /**
+   * Reads the ERC-20 token address from the market contract.
+   */
+  async getTokenAddress(): Promise<Address> {
+    this.assertConfigured();
+    const tokenAddress = await this.publicClient.readContract({
+      address: this.contractAddress,
+      abi: PredictionMarketERC20Abi,
+      functionName: "token",
+    });
+    return tokenAddress as Address;
+  }
+
+  /**
+   * Mints test tokens to the connected wallet by calling mint() on the ERC-20 token.
+   * The test token (MockERC20) has a public, permissionless mint function.
+   * @param amount Human-readable amount (e.g. "1000" for 1000 USDC).
+   * @param callerAddress The wallet address to mint to.
+   * @returns TransactionResult with the tx hash.
+   */
+  async mintTestTokens(
+    amount: string,
+    callerAddress?: string
+  ): Promise<TransactionResult<void>> {
+    this.assertConfigured();
+    if (!this.walletClient) {
+      throw new Error("WalletClient is required to mint tokens on Sonic.");
+    }
+    const account = this.getAccount(callerAddress);
+    const decimals = await this.getDecimals();
+    const amountBigInt = parseUnits(amount, decimals);
+    const tokenAddress = await this.getTokenAddress();
+
+    const MINT_ABI = [
+      {
+        type: "function",
+        name: "mint",
+        inputs: [
+          { name: "to", type: "address", internalType: "address" },
+          { name: "amount", type: "uint256", internalType: "uint256" },
+        ],
+        outputs: [],
+        stateMutability: "nonpayable",
+      },
+    ] as const;
+
+    const txHash = await this.walletClient.writeContract({
+      address: tokenAddress,
+      abi: MINT_ABI,
+      functionName: "mint",
+      args: [account, amountBigInt],
+      account,
+      chain: this.walletClient.chain,
+    });
+    await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    return { txHash };
+  }
+
+  /**
+   * Reads the ERC-20 token balance of a given address.
+   */
+  async getTokenBalance(userAddress: string): Promise<number> {
+    this.assertConfigured();
+    const tokenAddress = await this.getTokenAddress();
+    const decimals = await this.getDecimals();
+    const balance = await this.publicClient.readContract({
+      address: tokenAddress,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [userAddress as Address],
+    } as any);
+    return Number(formatUnits(balance as bigint, decimals));
   }
 }

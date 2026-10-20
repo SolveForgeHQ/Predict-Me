@@ -13,13 +13,15 @@ import {
   type PredictionMarketClient,
   StellarMarketClient,
   AvalancheMarketClient,
+  SonicMarketClient,
+  sonicTestnet,
 } from "@predict-me/core";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 import { avalancheFuji } from "viem/chains";
 import { useWalletClient } from "wagmi";
 import { signTransaction, STELLAR_NETWORK_PASSPHRASE } from "@/lib/wallet";
 
-export type ChainId = "avalanche" | "stellar";
+export type ChainId = "avalanche" | "stellar" | "sonic";
 
 export interface ChainMetadata {
   id: ChainId;
@@ -29,6 +31,12 @@ export interface ChainMetadata {
   color: string;
   badgeBg: string;
   borderColor: string;
+  /** Block explorer base URL (no trailing slash). */
+  explorerBaseUrl: string;
+  /** Faucet URL for testnet tokens (native gas). */
+  faucetUrl?: string;
+  /** Chain ID number for EVM chains (used for wagmi network switching). */
+  evmChainId?: number;
 }
 
 export const CHAIN_METADATA: Record<ChainId, ChainMetadata> = {
@@ -40,6 +48,9 @@ export const CHAIN_METADATA: Record<ChainId, ChainMetadata> = {
     color: "#E84142",
     badgeBg: "rgba(232, 65, 66, 0.15)",
     borderColor: "rgba(232, 65, 66, 0.35)",
+    explorerBaseUrl: "https://testnet.snowtrace.io",
+    faucetUrl: "https://faucet.avax-test.network/",
+    evmChainId: 43113,
   },
   stellar: {
     id: "stellar",
@@ -49,6 +60,21 @@ export const CHAIN_METADATA: Record<ChainId, ChainMetadata> = {
     color: "#00D084",
     badgeBg: "rgba(0, 208, 132, 0.15)",
     borderColor: "rgba(0, 208, 132, 0.35)",
+    explorerBaseUrl: "https://stellar.expert/explorer/testnet",
+    faucetUrl: "https://faucet.stellar.org/",
+  },
+  sonic: {
+    id: "sonic",
+    name: "Sonic Testnet",
+    shortName: "Sonic",
+    // Default to "S" for the native gas token; trade currency is read from the ERC-20 contract.
+    currency: "S",
+    color: "#8B5CF6",
+    badgeBg: "rgba(139, 92, 246, 0.15)",
+    borderColor: "rgba(139, 92, 246, 0.35)",
+    explorerBaseUrl: "https://testnet.sonicscan.org",
+    faucetUrl: "https://testnet.soniclabs.com/account",
+    evmChainId: 14601,
   },
 };
 
@@ -73,7 +99,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY) as ChainId | null;
-      if (saved && (saved === "stellar" || saved === "avalanche")) {
+      if (saved && (saved === "stellar" || saved === "avalanche" || saved === "sonic")) {
         setChainState(saved);
       }
     } catch {
@@ -92,7 +118,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleChain = useCallback(() => {
-    setChain(chain === "stellar" ? "avalanche" : "stellar");
+    setChain(chain === "stellar" ? "avalanche" : chain === "avalanche" ? "sonic" : "stellar");
   }, [chain, setChain]);
 
   // Read the connected Stellar public key from localStorage (written by wallet.ts)
@@ -140,6 +166,33 @@ export function ChainProvider({ children }: { children: ReactNode }) {
       }
 
       return new AvalancheMarketClient({
+        contractAddress,
+        publicClient: publicClient as any,
+        walletClient,
+      });
+    }
+
+    if (chain === "sonic") {
+      const rpcUrl =
+        process.env.NEXT_PUBLIC_SONIC_RPC_URL ??
+        "https://rpc.testnet.soniclabs.com";
+      const contractAddress = (process.env.NEXT_PUBLIC_SONIC_CONTRACT_ADDRESS ??
+        "0x0000000000000000000000000000000000000000") as Address;
+
+      const publicClient = createPublicClient({
+        chain: sonicTestnet,
+        transport: http(rpcUrl),
+      });
+
+      let walletClient: any = wagmiWalletClient;
+      if (!walletClient && typeof window !== "undefined" && (window as any).ethereum) {
+        walletClient = createWalletClient({
+          chain: sonicTestnet,
+          transport: custom((window as any).ethereum),
+        });
+      }
+
+      return new SonicMarketClient({
         contractAddress,
         publicClient: publicClient as any,
         walletClient,

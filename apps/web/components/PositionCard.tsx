@@ -8,7 +8,7 @@ import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { parseTransactionError } from "@/lib/errors";
-import { Loader2, Gift, RefreshCw } from "lucide-react";
+import { Loader2, Gift, RefreshCw, AlertCircle } from "lucide-react";
 
 interface Props {
   market: Market;
@@ -37,10 +37,19 @@ export default function PositionCard({ market }: Props) {
   } | null>(null);
 
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
+  const [pendingAction, setPendingAction] = useState<"claim" | "refund" | "cancel">("claim");
   const [errorMsg, setErrorMsg] = useState("");
   const [txHash, setTxHash] = useState("");
 
   const isPending = pendingStep !== null;
+  const isSonic = chain === "sonic";
+
+  // Sonic cancellation: check if market is cancelled
+  const isCancelled =
+    isSonic &&
+    (onChainMarket?.status === "cancelled" ||
+     (market as any).status === "cancelled");
+  const hasStake = balances.some((b) => b > 0);
 
   const resolvedIndex =
     onChainMarket?.outcomeIndex ??
@@ -127,6 +136,7 @@ export default function PositionCard({ market }: Props) {
 
     setErrorMsg("");
     setTxHash("");
+    setPendingAction("claim");
     setPendingStep("simulating");
 
     try {
@@ -171,8 +181,105 @@ export default function PositionCard({ market }: Props) {
       console.error("[PositionCard] claimWinnings error:", err);
     } finally {
       setPendingStep(null);
+      setPendingAction("claim");
     }
   };
+
+  // ── Sonic: Refund from cancelled market ────────────────────────
+  const handleRefund = async () => {
+    if (!connected || !publicKey || !isSonic || isPending) return;
+    if (isWrongNetwork) {
+      await switchNetwork();
+      return;
+    }
+
+    const sonicClient = client as any;
+    if (typeof sonicClient.refund !== "function") return;
+
+    setErrorMsg("");
+    setTxHash("");
+    setPendingAction("refund");
+    setPendingStep("simulating");
+
+    try {
+      await new Promise((r) => setTimeout(r, 0));
+      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
+      const submittingTimer = setTimeout(() => setPendingStep("submitting"), 1200);
+      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2500);
+
+      const callPromise = sonicClient.refund(market.id);
+      const result = await callPromise;
+
+      clearTimeout(signingTimer);
+      clearTimeout(submittingTimer);
+      clearTimeout(confirmingTimer);
+
+      setTxHash(result.txHash);
+      const refundText =
+        result.data && result.data > 0
+          ? `${result.data} ${chainMetadata.currency}`
+          : "stake refunded";
+      toast.success("Refund Claimed!", `Successfully refunded ${refundText} on ${chainMetadata.name}.`);
+      await loadPositionAndMarket();
+    } catch (err) {
+      const message = parseTransactionError(err, { chain, currency: chainMetadata.currency, action: "claim" });
+      setErrorMsg(message);
+      toast.error("Refund Failed", message);
+      console.error("[PositionCard] refund error:", err);
+    } finally {
+      setPendingStep(null);
+      setPendingAction("claim");
+    }
+  };
+
+  // ── Sonic: Cancel unresolved market (after grace period) ─────────
+  const handleCancelUnresolved = async () => {
+    if (!connected || !publicKey || !isSonic || isPending) return;
+    if (isWrongNetwork) {
+      await switchNetwork();
+      return;
+    }
+
+    const sonicClient = client as any;
+    if (typeof sonicClient.cancelUnresolved !== "function") return;
+
+    setErrorMsg("");
+    setTxHash("");
+    setPendingAction("cancel");
+    setPendingStep("simulating");
+
+    try {
+      await new Promise((r) => setTimeout(r, 0));
+      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
+      const submittingTimer = setTimeout(() => setPendingStep("submitting"), 1200);
+      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2500);
+
+      const callPromise = sonicClient.cancelUnresolved(market.id);
+      const result = await callPromise;
+
+      clearTimeout(signingTimer);
+      clearTimeout(submittingTimer);
+      clearTimeout(confirmingTimer);
+
+      setTxHash(result.txHash);
+      toast.success("Market Cancelled!", `Market ${market.id} has been cancelled. Stakers can now refund.`);
+      await loadPositionAndMarket();
+    } catch (err) {
+      const message = parseTransactionError(err, { chain, currency: chainMetadata.currency, action: "resolve" });
+      setErrorMsg(message);
+      toast.error("Cancel Failed", message);
+      console.error("[PositionCard] cancelUnresolved error:", err);
+    } finally {
+      setPendingStep(null);
+      setPendingAction("claim");
+    }
+  };
+
+  // ── Check if cancel-unresolved is available (closeTime + grace period passed) ──
+  const endsAtMs = new Date(market.endsAt).getTime();
+  const isPastCloseTime = Date.now() >= endsAtMs;
+  const canCancelUnresolved =
+    isSonic && isPastCloseTime && market.status === "open" && connected;
 
   return (
     <div
@@ -252,7 +359,7 @@ export default function PositionCard({ market }: Props) {
       </div>
 
       {/* Claim Winnings Section */}
-      {connected && hasWinningPosition && (
+      {connected && hasWinningPosition && !isCancelled && (
         <div className="pt-3" style={{ borderTop: "1px solid #1E2435" }}>
           <div className="flex items-center justify-between mb-3 text-xs">
             <span style={{ color: "#8B93A7" }}>Claimable Outcome:</span>
@@ -296,7 +403,7 @@ export default function PositionCard({ market }: Props) {
                 boxShadow: "0 0 24px rgba(0,208,132,0.35)",
               }}
             >
-              {isPending ? (
+              {isPending && pendingAction === "claim" ? (
                 <>
                   <Loader2 size={15} className="animate-spin" />
                   {getStepLabel(pendingStep!)}
@@ -305,6 +412,85 @@ export default function PositionCard({ market }: Props) {
                 <>
                   <Gift size={16} strokeWidth={2.2} />
                   Claim Winnings
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Sonic: Cancelled market refund ───────────────────────── */}
+      {connected && isCancelled && hasStake && (
+        <div className="pt-3" style={{ borderTop: "1px solid #1E2435" }}>
+          <div className="flex items-center justify-between mb-3 text-xs">
+            <span style={{ color: "#8B93A7" }}>Market Cancelled:</span>
+            <span className="font-bold" style={{ color: "#F59E0B" }}>
+              Refund available
+            </span>
+          </div>
+
+          {isWrongNetwork ? (
+            <button
+              onClick={switchNetwork}
+              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg text-white cursor-pointer"
+              style={{ backgroundColor: "#E84142" }}
+            >
+              Switch to {chainMetadata.name}
+            </button>
+          ) : (
+            <button
+              onClick={handleRefund}
+              disabled={isPending}
+              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-lg"
+              style={{ backgroundColor: "#F59E0B", color: "#0B0E14" }}
+            >
+              {isPending && pendingAction === "refund" ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" />
+                  {getStepLabel(pendingStep!)}
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={16} strokeWidth={2.2} />
+                  Refund My Stake
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Sonic: Cancel unresolved market (after grace period) ── */}
+      {connected && canCancelUnresolved && (
+        <div className="pt-3" style={{ borderTop: "1px solid #1E2435" }}>
+          <p className="text-xs mb-2" style={{ color: "#F59E0B" }}>
+            This market&apos;s close time has passed but it hasn&apos;t been resolved.
+            After the grace period, anyone can cancel it to unlock refunds.
+          </p>
+          {isWrongNetwork ? (
+            <button
+              onClick={switchNetwork}
+              className="w-full py-2.5 rounded-xl text-xs font-bold text-white"
+              style={{ backgroundColor: "#E84142" }}
+            >
+              Switch to {chainMetadata.name}
+            </button>
+          ) : (
+            <button
+              onClick={handleCancelUnresolved}
+              disabled={isPending}
+              className="w-full py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
+              style={{ backgroundColor: "rgba(245, 158, 11, 0.15)", border: "1px solid rgba(245, 158, 11, 0.4)", color: "#F59E0B" }}
+            >
+              {isPending && pendingAction === "cancel" ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  {getStepLabel(pendingStep!)}
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={13} />
+                  Cancel unresolved market
                 </>
               )}
             </button>
@@ -322,7 +508,7 @@ export default function PositionCard({ market }: Props) {
       {/* Inline claim error */}
       {errorMsg && !isPending && (
         <div className="mt-3">
-          <StatusBanner variant="error" title="Claim Failed" message={errorMsg} />
+          <StatusBanner variant="error" title="Transaction Failed" message={errorMsg} />
         </div>
       )}
 
@@ -331,8 +517,9 @@ export default function PositionCard({ market }: Props) {
         <div className="mt-3">
           <StatusBanner
             variant="success"
-            title="Winnings claimed successfully!"
+            title="Transaction confirmed successfully!"
             txHash={txHash}
+            explorerBaseUrl={chainMetadata.explorerBaseUrl}
           />
         </div>
       )}

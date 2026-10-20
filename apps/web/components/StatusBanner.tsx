@@ -19,6 +19,8 @@ interface Props {
   stepLabel?: string;
   onAction?: () => void;
   actionLabel?: string;
+  /** Explorer base URL for transaction links. If omitted, defaults are used based on txHash format. */
+  explorerBaseUrl?: string;
 }
 
 export default function StatusBanner({
@@ -29,6 +31,7 @@ export default function StatusBanner({
   stepLabel,
   onAction,
   actionLabel,
+  explorerBaseUrl,
 }: Props) {
   // ── 1. Transaction Pending ──────────────────────────────────
   if (variant === "pending") {
@@ -85,7 +88,9 @@ export default function StatusBanner({
           {txHash && (
             <a
               href={
-                txHash.startsWith("0x")
+                explorerBaseUrl
+                  ? `${explorerBaseUrl}/tx/${txHash}`
+                  : txHash.startsWith("0x")
                   ? `https://testnet.snowtrace.io/tx/${txHash}`
                   : `https://stellar.expert/explorer/testnet/tx/${txHash}`
               }
@@ -93,7 +98,7 @@ export default function StatusBanner({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 underline opacity-85 hover:opacity-100 font-mono text-[11px] mt-1 break-all"
             >
-              <span>{txHash.startsWith("0x") ? "View on Snowtrace (Fuji)" : "View on Stellar Expert"}</span>
+              <span>{explorerBaseUrl ? "View on SonicScan" : txHash.startsWith("0x") ? "View on Snowtrace (Fuji)" : "View on Stellar Expert"}</span>
               <ExternalLink size={10} />
             </a>
           )}
