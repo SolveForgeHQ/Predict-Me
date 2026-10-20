@@ -125,6 +125,18 @@ export default function PositionCard({ market }: Props) {
     loadPositionAndMarket();
   }, [loadPositionAndMarket]);
 
+  // Auto-refresh when TradePanel fires a buy event for this market
+  useEffect(() => {
+    function handleBuy(e: Event) {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.marketId === market.id) {
+        loadPositionAndMarket();
+      }
+    }
+    window.addEventListener("predict-me:buy", handleBuy);
+    return () => window.removeEventListener("predict-me:buy", handleBuy);
+  }, [market.id, loadPositionAndMarket]);
+
   // ── Claim winnings via the active chain client ─────────────────────
   const handleClaim = async () => {
     if (!connected || !publicKey || !hasWinningPosition || isPending) return;

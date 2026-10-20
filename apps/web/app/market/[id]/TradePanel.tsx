@@ -241,6 +241,8 @@ export default function TradePanel({ market }: Props) {
         `Successfully purchased ${selectedLabel} shares on ${chainMetadata.name}.`
       );
       setAmount("");
+      // Notify PositionCard to refresh on-chain balance
+      window.dispatchEvent(new CustomEvent("predict-me:buy", { detail: { marketId: market.id } }));
       // Refresh allowance after buy
       if (isSonic) await loadAllowance();
     } catch (err) {
