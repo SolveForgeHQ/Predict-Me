@@ -125,7 +125,7 @@ export default function MarketsPage() {
 
       {/* Markets Grid */}
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
@@ -135,7 +135,7 @@ export default function MarketsPage() {
           ))}
         </div>
       ) : filteredMarkets.length > 0 ? (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {filteredMarkets.map((market) => (
             <MarketCard key={market.id} market={market} />
           ))}
