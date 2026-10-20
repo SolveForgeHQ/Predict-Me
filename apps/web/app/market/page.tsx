@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import MarketCard from "@/components/MarketCard";
-import { Market, MARKETS, loadMarketsWithSource } from "@/lib/markets";
+import { Market, loadMarketsWithSource } from "@/lib/markets";
 import StatusBanner from "@/components/StatusBanner";
 import { Search, TrendingUp, RefreshCw } from "lucide-react";
 import { useChain } from "@/context/ChainContext";
@@ -11,9 +11,9 @@ const CATEGORIES = ["All", "Crypto", "Sports", "Finance", "Tech"] as const;
 
 export default function MarketsPage() {
   const { chain, chainMetadata } = useChain();
-  const [markets, setMarkets] = useState<Market[]>(MARKETS);
+  const [markets, setMarkets] = useState<Market[]>([]);
   const [source, setSource] = useState<"backend" | "chain" | "fallback">("backend");
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -124,7 +124,17 @@ export default function MarketsPage() {
       </div>
 
       {/* Markets Grid */}
-      {filteredMarkets.length > 0 ? (
+      {isLoading ? (
+        <div className="grid grid-cols-2 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              className="rounded-2xl h-44 animate-pulse"
+              style={{ backgroundColor: "#161B26", border: "1px solid #1E2435" }}
+            />
+          ))}
+        </div>
+      ) : filteredMarkets.length > 0 ? (
         <div className="grid grid-cols-2 gap-3">
           {filteredMarkets.map((market) => (
             <MarketCard key={market.id} market={market} />
