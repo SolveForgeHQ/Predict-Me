@@ -4,6 +4,7 @@ import { MARKETS, getMarket, formatPool, timeRemaining, loadMarketsWithSource, m
 import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
+import PriceChart from "@/components/PriceChart";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -234,32 +235,11 @@ export default async function MarketPage({ params }: Props) {
         <div className="flex-1 flex flex-col gap-5">
 
           {/* Chart placeholder */}
-          <div
-            className="rounded-2xl p-6 flex flex-col items-center justify-center"
-            style={{
-              background: "linear-gradient(135deg, #161B26, #131820)",
-              border: "1px solid #1E2435",
-              minHeight: "200px",
-            }}
-          >
-            <svg width="100%" height="72" viewBox="0 0 300 72"
-              preserveAspectRatio="none" className="mb-3 opacity-50">
-              <defs>
-                <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00D084" stopOpacity="0.35" />
-                  <stop offset="100%" stopColor="#00D084" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <path d="M0,55 C20,50 40,28 70,32 C100,36 120,18 150,22
-                       C180,26 200,12 230,15 C260,18 280,24 300,18"
-                fill="none" stroke="#00D084" strokeWidth="2" />
-              <path d="M0,55 C20,50 40,28 70,32 C100,36 120,18 150,22
-                       C180,26 200,12 230,15 C260,18 280,24 300,18 L300,72 L0,72 Z"
-                fill="url(#cg)" />
-            </svg>
-            <p className="text-sm font-medium" style={{ color: "#8B93A7" }}>Price history</p>
-            <p className="text-xs mt-0.5" style={{ color: "#2A3347" }}>Coming soon</p>
-          </div>
+          <PriceChart
+            marketId={id}
+            chain={(market as any).chain ?? undefined}
+            outcomes={outcomes}
+          />
 
           {/* Market stats */}
           <div

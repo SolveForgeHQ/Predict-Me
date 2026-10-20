@@ -3,7 +3,7 @@ import { rpc, Contract, nativeToScVal, scValToNative, xdr } from '@stellar/stell
 import { createPublicClient, http, formatEther, type Address } from 'viem';
 import { drizzle } from 'drizzle-orm/d1';
 import { eq, or, and } from 'drizzle-orm';
-import { marketCache } from '../db/schema';
+import { marketCache, priceHistory } from '../db/schema';
 
 export type SupportedChain = 'stellar' | 'avalanche' | 'sonic';
 
@@ -598,6 +598,26 @@ async function syncChainMarkets(
       } catch (dbErr) {
         console.warn(`D1 marketCache write error for chain ${chain}:`, dbErr);
       }
+
+      // Write price history snapshots (best-effort, non-blocking)
+      try {
+        const db = drizzle(c.env.DB);
+        for (const m of freshMarkets) {
+          const totalPool = m.pools.reduce((a, b) => a + b, 0);
+          if (totalPool > 0) {
+            await db.insert(priceHistory).values({
+              marketKey: `${m.chain}:${m.id}`,
+              chain: m.chain,
+              marketId: m.id,
+              timestamp: now,
+              pools: JSON.stringify(m.pools),
+              totalPool,
+            });
+          }
+        }
+      } catch {
+        // Non-critical — silently ignore snapshot write failures
+      }
     }
 
     return { markets: freshMarkets, cached: false };
@@ -827,6 +847,56 @@ markets.get('/:id', async (c) => {
   }
 
   return c.json({ error: `Market ${id} not found.` }, 404);
+});
+
+// ── GET /markets/:id/history ─────────────────────────────────
+// Returns up to 200 price snapshots for a market, sorted by timestamp asc.
+// Used to render the price history chart on the market detail page.
+markets.get('/:id/history', async (c) => {
+  const id = c.req.param('id');
+  const chainParam = c.req.query('chain')?.toLowerCase() as SupportedChain | undefined;
+
+  if (!c.env?.DB) {
+    return c.json({ history: [] });
+  }
+
+  try {
+    const db = drizzle(c.env.DB);
+    const marketKey = chainParam ? `${chainParam}:${id}` : undefined;
+
+    const rows = await (c.env.DB as D1Database)
+      .prepare(
+        marketKey
+          ? `SELECT timestamp, pools, total_pool FROM price_history WHERE market_key = ? ORDER BY timestamp ASC LIMIT 200`
+          : `SELECT timestamp, pools, total_pool FROM price_history WHERE market_id = ? ORDER BY timestamp ASC LIMIT 200`
+      )
+      .bind(marketKey ?? id)
+      .all();
+
+    const history = (rows.results ?? []).map((row: any) => {
+      let pools: number[] = [];
+      try {
+        pools = JSON.parse(row.pools as string);
+      } catch {
+        pools = [];
+      }
+      const total = Number(row.total_pool ?? 0);
+      const percents = pools.map((p) =>
+        total > 0 ? Math.round((p / total) * 100) : Math.round(100 / Math.max(pools.length, 1))
+      );
+      return {
+        timestamp: row.timestamp,
+        pools,
+        totalPool: total,
+        percents,
+      };
+    });
+
+    return c.json({ history });
+  } catch (err) {
+    console.warn('Failed to read price history from D1:', err);
+    return c.json({ history: [] });
+  }
 });
 
 export default markets;

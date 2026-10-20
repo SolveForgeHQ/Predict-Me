@@ -39,3 +39,13 @@ export const marketCache = sqliteTable('market_cache', {
   resolvedOutcome: text('resolved_outcome'),
   updatedAt: integer('updated_at').notNull(),
 });
+
+export const priceHistory = sqliteTable('price_history', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  marketKey: text('market_key').notNull(),
+  chain: text('chain').notNull(),
+  marketId: text('market_id').notNull(),
+  timestamp: integer('timestamp').notNull(),
+  pools: text('pools').notNull(),
+  totalPool: real('total_pool').notNull().default(0),
+});
