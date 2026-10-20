@@ -9,7 +9,7 @@ import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { parseTransactionError } from "@/lib/errors";
 import { Wallet, Loader2, ExternalLink, Coins } from "lucide-react";
-import type { SonicMarketClient } from "@predict-me/core";
+import { SonicMarketClient } from "@predict-me/core";
 import { parseUnits } from "viem";
 
 interface Props {
