@@ -33,6 +33,12 @@ export default function ChainSwitcher() {
       currency: "XLM",
       color: "#00D084",
     },
+    {
+      id: "sonic",
+      name: "Sonic",
+      currency: "S",
+      color: "#8B5CF6",
+    },
   ];
 
   return (

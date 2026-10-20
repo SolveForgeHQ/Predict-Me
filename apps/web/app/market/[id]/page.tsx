@@ -35,6 +35,20 @@ export default async function MarketPage({ params }: Props) {
 
   const catColor = CATEGORY_COLORS[market.category] ?? "#8B93A7";
 
+  // Status flags
+  const endsAtMs = new Date(market.endsAt).getTime();
+  const isPastCloseTime = Date.now() >= endsAtMs;
+  const isClosed = isPastCloseTime && market.status === "open";
+  const isCancelled = (market as any).status === "cancelled";
+  const isResolved = market.status !== "open" && !isCancelled;
+
+  // Status label for the stats bar
+  let statusLabel = "Open";
+  let statusColor = "#00D084";
+  if (isCancelled) { statusLabel = "Cancelled"; statusColor = "#F59E0B"; }
+  else if (isClosed) { statusLabel = "Closed"; statusColor = "#8B93A7"; }
+  else if (isResolved) { statusLabel = winner ?? "Resolved"; statusColor = outcomeColor(market.resolvedOutcomeIndex ?? 0); }
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
 
@@ -71,6 +85,32 @@ export default async function MarketPage({ params }: Props) {
         >
           {market.question}
         </h1>
+
+        {/* ── Closed / Cancelled banners ───────────────────────── */}
+        {isCancelled && (
+          <div
+            className="rounded-xl px-4 py-3 mb-6 flex items-center gap-3 text-sm"
+            style={{ backgroundColor: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}
+          >
+            <span className="text-base">⚠️</span>
+            <div>
+              <p className="font-bold">Market Cancelled</p>
+              <p className="text-xs opacity-80 mt-0.5">This market was cancelled. All stakers can claim a refund.</p>
+            </div>
+          </div>
+        )}
+        {isClosed && (
+          <div
+            className="rounded-xl px-4 py-3 mb-6 flex items-center gap-3 text-sm"
+            style={{ backgroundColor: "rgba(139,147,167,0.1)", border: "1px solid rgba(139,147,167,0.2)", color: "#8B93A7" }}
+          >
+            <span className="text-base">⏳</span>
+            <div>
+              <p className="font-bold">Market Closed — Awaiting Resolution</p>
+              <p className="text-xs opacity-80 mt-0.5">Trading has ended. The admin will resolve the outcome shortly.</p>
+            </div>
+          </div>
+        )}
 
         {/* ── ODDS BAR — N outcomes, wraps cleanly ────────────── */}
         <div
@@ -132,6 +172,19 @@ export default async function MarketPage({ params }: Props) {
             </p>
           )}
         </div>
+
+        {/* ── Resolution criteria (Sonic markets) ─────────────── */}
+        {(market as any).resolutionCriteria && (
+          <div
+            className="mt-4 rounded-xl px-4 py-3 text-xs"
+            style={{ backgroundColor: "#161B26", border: "1px solid #1E2435" }}
+          >
+            <p className="font-semibold mb-1 uppercase tracking-wider" style={{ color: "#8B93A7" }}>
+              Resolution Criteria
+            </p>
+            <p style={{ color: "#D0D5DD", lineHeight: 1.6 }}>{(market as any).resolutionCriteria}</p>
+          </div>
+        )}
       </div>
 
       {/* ── Two-column body ──────────────────────────────────── */}
@@ -198,22 +251,36 @@ export default async function MarketPage({ params }: Props) {
               </p>
               <p
                 className="text-xl font-extrabold"
-                style={{
-                  color: market.status === "open" ? "#00D084" : outcomeColor(market.resolvedOutcomeIndex ?? 0),
-                }}
+                style={{ color: statusColor }}
               >
-                {market.status === "open" ? "Open" : (winner ?? "Resolved")}
+                {statusLabel}
               </p>
             </div>
           </div>
+
+          {/* Resolution criteria — shown for Sonic markets */}
+          {(market as any).resolutionCriteria && (
+            <div
+              className="rounded-2xl p-5"
+              style={{
+                background: "linear-gradient(135deg, #161B26, #131820)",
+                border: "1px solid #1E2435",
+              }}
+            >
+              <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B93A7" }}>
+                Resolution Criteria
+              </p>
+              <p className="text-sm leading-relaxed" style={{ color: "#D0D5DD" }}>
+                {(market as any).resolutionCriteria}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* RIGHT — sticky trade + position */}
         <div className="lg:w-80 xl:w-96 flex flex-col gap-5">
           <div className="lg:sticky lg:top-28 flex flex-col gap-5">
-            <TradePanel market={market} />
-
-            {/* Position card & Claim Winnings */}
+            {!isCancelled && !isClosed && <TradePanel market={market} />}
             <PositionCard market={market} />
           </div>
         </div>
