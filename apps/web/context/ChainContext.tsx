@@ -96,7 +96,11 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const { data: wagmiWalletClient } = useWalletClient();
 
   // Restore chain selection from localStorage on mount
+  // Locked to sonic only for now — uncomment when multi-chain is re-enabled
   useEffect(() => {
+    setChainState("sonic");
+    setMounted(true);
+    /*
     try {
       const saved = localStorage.getItem(STORAGE_KEY) as ChainId | null;
       if (saved && (saved === "stellar" || saved === "avalanche" || saved === "sonic")) {
@@ -105,7 +109,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignore localStorage access issues
     }
-    setMounted(true);
+    */
   }, []);
 
   const setChain = useCallback((newChain: ChainId) => {

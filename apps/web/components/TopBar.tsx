@@ -145,7 +145,9 @@ export default function TopBar() {
               </Link>
             )}
 
+            {/* ChainSwitcher hidden — Sonic only for now. Re-enable when multi-chain is ready.
             <ChainSwitcher />
+            */}
 
             {/* Wallet button area */}
             <div className="relative" ref={dropdownRef}>
