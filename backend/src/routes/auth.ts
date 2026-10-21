@@ -87,7 +87,7 @@ auth.post('/login', async (c) => {
     const keypair = Keypair.fromPublicKey(address);
     const messageBytes = new TextEncoder().encode(message);
     const signatureBytes = Uint8Array.from(atob(signedMessage), (c) => c.charCodeAt(0));
-    isValid = keypair.verify(messageBytes, signatureBytes);
+    isValid = keypair.verify(messageBytes as unknown as Buffer, signatureBytes as unknown as Buffer);
   } catch {
     return c.json({ error: 'Invalid Stellar address.' }, 400);
   }
@@ -136,7 +136,7 @@ auth.post('/login', async (c) => {
     const existingMatch = cookieHeader.match(/(?:^|;\s*)session=([^;]+)/);
     if (existingMatch) {
       try {
-        const existing = await verify(existingMatch[1], secret) as { sub?: string };
+        const existing = await verify(existingMatch[1], secret, 'HS256') as { sub?: string };
         if (existing.sub === address) return c.json({ ok: true });
       } catch { /* fall through */ }
     }
@@ -185,7 +185,7 @@ auth.get('/me', async (c) => {
 
   const secret = c.env?.JWT_SECRET ?? 'dev-secret-change-me';
   try {
-    const decoded = await verify(match[1], secret) as { sub?: string };
+    const decoded = await verify(match[1], secret, 'HS256') as { sub?: string };
     return c.json({ address: decoded.sub ?? null });
   } catch {
     return c.json({ error: 'Session expired or invalid.' }, 401);
@@ -201,7 +201,7 @@ auth.post('/logout', async (c) => {
   if (match) {
     const secret = c.env?.JWT_SECRET ?? 'dev-secret-change-me';
     try {
-      await (await import('hono/jwt')).verify(match[1], secret);
+      await (await import('hono/jwt')).verify(match[1], secret, 'HS256');
     } catch {
       // Expired or invalid — still clear the cookie.
     }

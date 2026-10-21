@@ -40,7 +40,8 @@ export async function requireAuth(c: Context, next: Next): Promise<Response | vo
 
   let payload: SessionPayload;
   try {
-    payload = (await verify(token, secret)) as SessionPayload;
+    const raw = await verify(token, secret, 'HS256');
+    payload = raw as unknown as SessionPayload;
   } catch {
     return c.json({ error: 'Session expired or invalid. Please reconnect your wallet.' }, 401);
   }

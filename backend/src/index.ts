@@ -19,7 +19,7 @@ app.use('*', cors({
   origin: (origin, c) => {
     const allowed = (c.env?.FRONTEND_ORIGIN ?? 'http://localhost:3000')
       .split(',')
-      .map((o) => o.trim());
+      .map((o: string) => o.trim());
     return allowed.includes(origin) ? origin : allowed[0];
   },
   allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
