@@ -75,3 +75,41 @@ export const sessions = sqliteTable('sessions', {
   issuedAt: integer('issued_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
 });
+
+/**
+ * indexer_state — one row per chain, tracks the last fully processed block
+ * so the event indexer can resume without re-scanning from genesis.
+ */
+export const indexerState = sqliteTable('indexer_state', {
+  chain:     text('chain').primaryKey(),
+  lastBlock: integer('last_block').notNull().default(0),
+});
+
+/**
+ * chain_events — one row per on-chain log event.
+ *
+ * Column mapping from PredictionMarketERC20 events:
+ *   SharesBought    → wallet=buyer,   outcomeIndex=outcomeIndex, amount=amount (base units)
+ *   WinningsClaimed → wallet=claimer, outcomeIndex=NULL,         amount=payout (base units)
+ *   Refunded        → wallet=user,    outcomeIndex=NULL,         amount=amount (base units)
+ *   MarketCreated   → wallet=NULL,    outcomeIndex=NULL,         amount=NULL
+ *   MarketResolved  → wallet=NULL,    outcomeIndex=winningOutcome (as text), amount=NULL
+ *   MarketCancelled → wallet=NULL,    outcomeIndex=NULL,         amount=NULL
+ *
+ * Amounts are stored as text strings of token base units — never floating point.
+ */
+export const chainEvents = sqliteTable('chain_events', {
+  id:           integer('id').primaryKey({ autoIncrement: true }),
+  chain:        text('chain').notNull(),
+  txHash:       text('tx_hash').notNull(),
+  logIndex:     integer('log_index').notNull(),
+  blockNumber:  integer('block_number').notNull(),
+  blockTime:    integer('block_time').notNull(),   // Unix seconds
+  eventName:    text('event_name').notNull(),
+  marketId:     text('market_id').notNull(),
+  wallet:       text('wallet'),                    // NULL where not applicable
+  outcomeIndex: text('outcome_index'),             // string uint256 or NULL
+  amount:       text('amount'),                    // token base units as string, or NULL
+}, (t) => ({
+  uniqLog: unique('chain_events_chain_tx_log_unique').on(t.chain, t.txHash, t.logIndex),
+}));
