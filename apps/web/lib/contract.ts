@@ -21,6 +21,7 @@ import {
   Account,
 } from "@stellar/stellar-sdk";
 import { signTransaction, STELLAR_NETWORK_PASSPHRASE } from "@/lib/wallet";
+import { getBreaker, CircuitOpenError } from "@/lib/circuitBreaker";
 import type { Market, Position, MarketStatus } from "@/lib/types";
 
 // ── Config ───────────────────────────────────────────────────
@@ -48,6 +49,7 @@ export class ContractError extends Error {
       | "SIMULATION_FAILED"
       | "SIGN_REJECTED"
       | "SUBMIT_FAILED"
+      | "CIRCUIT_OPEN"
       | "UNKNOWN",
     message: string
   ) {
@@ -55,6 +57,13 @@ export class ContractError extends Error {
     this.name = "ContractError";
   }
 }
+
+// Circuit breaker for Soroban RPC endpoint.
+// Trips after 3 consecutive RPC failures; probes again after 20 s.
+const sorobanBreaker = getBreaker("soroban-rpc", {
+  failureThreshold: 3,
+  resetTimeoutMs: 20_000,
+});
 
 // ── Shared transaction helpers ────────────────────────────────
 
@@ -78,80 +87,93 @@ async function invokeContract(
   const server = getServer();
   const contract = new Contract(CONTRACT_ID);
 
-  // Load the caller's current sequence number from the network
-  const accountData = await server.getAccount(callerPublicKey);
-  const account = new Account(callerPublicKey, (accountData as any).sequence);
-
-  // Build the transaction
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: STELLAR_NETWORK_PASSPHRASE,
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(60)
-    .build();
-
-  // Simulate to get the resource footprint
-  const simResult = await server.simulateTransaction(tx);
-  if (rpc.Api.isSimulationError(simResult)) {
-    throw new ContractError(
-      "SIMULATION_FAILED",
-      `Contract simulation failed: ${simResult.error}`
-    );
-  }
-
-  // Assemble adds the resource fee and auth entries from simulation
-  const preparedTx = rpc.assembleTransaction(tx, simResult).build();
-
-  // Sign via Freighter
-  let signedXdr: string;
   try {
-    signedXdr = await signTransaction(preparedTx.toXDR());
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (
-      msg.toLowerCase().includes("rejected") ||
-      msg.toLowerCase().includes("denied") ||
-      msg.toLowerCase().includes("cancelled")
-    ) {
-      throw new ContractError("SIGN_REJECTED", "Transaction was rejected in Freighter.");
-    }
-    throw new ContractError("SIGN_REJECTED", msg);
-  }
-
-  // Submit
-  const submittedTx = TransactionBuilder.fromXDR(
-    signedXdr,
-    STELLAR_NETWORK_PASSPHRASE
-  );
-  const sendResult = await server.sendTransaction(submittedTx);
-
-  if (sendResult.status === "ERROR") {
-    throw new ContractError(
-      "SUBMIT_FAILED",
-      `Transaction failed: ${sendResult.errorResult?.toXDR("base64") ?? "unknown error"}`
+    // ── Account load ───────────────────────────────────────────
+    const accountData = await sorobanBreaker.call(() =>
+      server.getAccount(callerPublicKey)
     );
-  }
+    const account = new Account(callerPublicKey, (accountData as any).sequence);
 
-  // Poll until finalised (PENDING → SUCCESS/FAILED)
-  const hash = sendResult.hash;
-  for (let i = 0; i < 20; i++) {
-    await new Promise((r) => setTimeout(r, 1500));
-    const statusResult = await server.getTransaction(hash);
-    if (statusResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-      return hash;
-    }
-    if (statusResult.status === rpc.Api.GetTransactionStatus.FAILED) {
+    // ── Build + simulate ───────────────────────────────────────
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(60)
+      .build();
+
+    const simResult = await sorobanBreaker.call(() =>
+      server.simulateTransaction(tx)
+    );
+    if (rpc.Api.isSimulationError(simResult)) {
       throw new ContractError(
-        "SUBMIT_FAILED",
-        `Transaction ${hash} was included in a ledger but execution failed.`
+        "SIMULATION_FAILED",
+        `Contract simulation failed: ${simResult.error}`
       );
     }
-    // NOT_FOUND means still pending — keep polling
-  }
 
-  // Timed out polling — transaction may still succeed; return hash anyway
-  return hash;
+    const preparedTx = rpc.assembleTransaction(tx, simResult).build();
+
+    // ── Sign (wallet — not RPC, so not wrapped by sorobanBreaker) ──
+    let signedXdr: string;
+    try {
+      signedXdr = await signTransaction(preparedTx.toXDR());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.toLowerCase().includes("rejected") ||
+        msg.toLowerCase().includes("denied") ||
+        msg.toLowerCase().includes("cancelled") ||
+        (err instanceof Error && (err as any).code === "CIRCUIT_OPEN")
+      ) {
+        throw new ContractError("SIGN_REJECTED", msg);
+      }
+      throw new ContractError("SIGN_REJECTED", msg);
+    }
+
+    // ── Submit ─────────────────────────────────────────────────
+    const submittedTx = TransactionBuilder.fromXDR(signedXdr, STELLAR_NETWORK_PASSPHRASE);
+    const sendResult = await sorobanBreaker.call(() =>
+      server.sendTransaction(submittedTx)
+    );
+
+    if (sendResult.status === "ERROR") {
+      throw new ContractError(
+        "SUBMIT_FAILED",
+        `Transaction failed: ${sendResult.errorResult?.toXDR("base64") ?? "unknown error"}`
+      );
+    }
+
+    // ── Poll until finalised ───────────────────────────────────
+    const hash = sendResult.hash;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const statusResult = await sorobanBreaker.call(() =>
+        server.getTransaction(hash)
+      );
+      if (statusResult.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+        return hash;
+      }
+      if (statusResult.status === rpc.Api.GetTransactionStatus.FAILED) {
+        throw new ContractError(
+          "SUBMIT_FAILED",
+          `Transaction ${hash} was included in a ledger but execution failed.`
+        );
+      }
+    }
+
+    return hash;
+  } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      throw new ContractError(
+        "CIRCUIT_OPEN",
+        "Soroban RPC is temporarily unreachable after repeated failures. Please try again in a moment."
+      );
+    }
+    if (err instanceof ContractError) throw err;
+    throw new ContractError("UNKNOWN", err instanceof Error ? err.message : String(err));
+  }
 }
 
 // ── create_market ─────────────────────────────────────────────
@@ -210,10 +232,12 @@ export async function fetchMarkets(): Promise<Market[] | null> {
       const countKey = xdr.ScVal.scvVec([
         nativeToScVal("MarketCount", { type: "symbol" }),
       ]);
-      const entry = await server.getContractData(
-        contract.address(),
-        countKey,
-        (rpc.Durability as any).Instance ?? (rpc.Durability as any).Temporary
+      const entry = await sorobanBreaker.call(() =>
+        server.getContractData(
+          contract.address(),
+          countKey,
+          (rpc.Durability as any).Instance ?? (rpc.Durability as any).Temporary
+        )
       );
       if (entry && entry.val) {
         const val = scValToNative(entry.val.contractData().val());
@@ -233,10 +257,12 @@ export async function fetchMarkets(): Promise<Market[] | null> {
           nativeToScVal("Market", { type: "symbol" }),
           nativeToScVal(id, { type: "u32" }),
         ]);
-        const entry = await server.getContractData(
-          contract.address(),
-          marketKey,
-          rpc.Durability.Persistent
+        const entry = await sorobanBreaker.call(() =>
+          server.getContractData(
+            contract.address(),
+            marketKey,
+            rpc.Durability.Persistent
+          )
         );
         if (entry && entry.val) {
           const state = scValToNative(entry.val.contractData().val());

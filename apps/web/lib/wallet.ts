@@ -24,6 +24,7 @@ import { xBullModule } from "@creit.tech/stellar-wallets-kit/modules/xbull";
 import { AlbedoModule } from "@creit.tech/stellar-wallets-kit/modules/albedo";
 import { RabetModule } from "@creit.tech/stellar-wallets-kit/modules/rabet";
 import { HanaModule } from "@creit.tech/stellar-wallets-kit/modules/hana";
+import { getBreaker, CircuitOpenError } from "@/lib/circuitBreaker";
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -34,6 +35,14 @@ export const STELLAR_NETWORK_PASSPHRASE =
 const STORAGE_KEY = "predict-me:wallet";
 const WALLET_ID_KEY = "predict-me:wallet-id";
 
+// Circuit breaker protecting all StellarWalletsKit external calls.
+// Trips after 3 consecutive infrastructure failures; resets after 15 s.
+// User rejections (cancelled, wrong network) do NOT count as failures.
+const walletBreaker = getBreaker("stellar-wallet-kit", {
+  failureThreshold: 3,
+  resetTimeoutMs: 15_000,
+});
+
 // ── Error types ──────────────────────────────────────────────
 
 export type WalletErrorCode =
@@ -41,6 +50,7 @@ export type WalletErrorCode =
   | "REJECTED"
   | "WRONG_NETWORK"
   | "AUTH_FAILED"
+  | "CIRCUIT_OPEN"
   | "UNKNOWN";
 
 export class WalletError extends Error {
@@ -107,9 +117,17 @@ export async function connectWallet(): Promise<string> {
 
   let address: string;
   try {
-    const result = await StellarWalletsKit.authModal();
-    address = result.address;
+    address = await walletBreaker.call(async () => {
+      const result = await StellarWalletsKit.authModal();
+      return result.address;
+    });
   } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      throw new WalletError(
+        "CIRCUIT_OPEN",
+        "Wallet service is temporarily unavailable after repeated failures. Please wait a moment and try again."
+      );
+    }
     // Some wallet SDKs throw plain objects, not Error instances — extract a readable message
     let msg: string;
     if (err instanceof Error) {
@@ -137,7 +155,7 @@ export async function connectWallet(): Promise<string> {
     if (msg.toLowerCase().includes("not installed") || msg.toLowerCase().includes("not found")) {
       throw new WalletError("NOT_INSTALLED", msg);
     }
-    throw new WalletError("UNKNOWN", msg);
+    throw new WalletError("UNKNOWN", msg instanceof Error ? (msg as any).message : String(msg));
   }
 
   // Verify the connected network if supported by the wallet module
@@ -205,12 +223,12 @@ export async function restoreSession(): Promise<string | null> {
     if (storedWalletId) {
       StellarWalletsKit.setWallet(storedWalletId);
     }
-    const { address } = await StellarWalletsKit.getAddress();
+    const { address } = await walletBreaker.call(() => StellarWalletsKit.getAddress());
     if (address && address === stored) {
       return address;
     }
   } catch {
-    // No active session — silently clear storage
+    // No active session or circuit open — silently clear storage
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(WALLET_ID_KEY);
   }
@@ -226,11 +244,16 @@ export async function restoreSession(): Promise<string | null> {
 export async function signTransaction(xdr: string): Promise<string> {
   initKit();
   try {
-    const { signedTxXdr } = await StellarWalletsKit.signTransaction(xdr, {
-      networkPassphrase: STELLAR_NETWORK_PASSPHRASE,
-    });
+    const { signedTxXdr } = await walletBreaker.call(() =>
+      StellarWalletsKit.signTransaction(xdr, {
+        networkPassphrase: STELLAR_NETWORK_PASSPHRASE,
+      })
+    );
     return signedTxXdr;
   } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      throw new WalletError("CIRCUIT_OPEN", "Wallet service is temporarily unavailable. Please wait a moment and try again.");
+    }
     let msg: string;
     if (err instanceof Error) {
       msg = err.message;
@@ -263,9 +286,14 @@ export async function signTransaction(xdr: string): Promise<string> {
 export async function signMessage(message: string): Promise<string> {
   initKit();
   try {
-    const { signedMessage } = await StellarWalletsKit.signMessage(message);
+    const { signedMessage } = await walletBreaker.call(() =>
+      StellarWalletsKit.signMessage(message)
+    );
     return signedMessage;
   } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      throw new WalletError("CIRCUIT_OPEN", "Wallet service is temporarily unavailable. Please wait a moment and try again.");
+    }
     let msg: string;
     if (err instanceof Error) {
       msg = err.message;

@@ -5,6 +5,70 @@ import { drizzle } from 'drizzle-orm/d1';
 import { eq, or, and } from 'drizzle-orm';
 import { marketCache, priceHistory } from '../db/schema';
 
+// ── Backend circuit breakers for external RPC providers ───────────────────
+// Each breaker is module-level (per Worker isolate). They trip after 3
+// consecutive failures and probe again after 30 s — matching the cache TTL
+// so a tripped breaker never blocks the D1 fallback path.
+// State is lost on Worker restart/cold-start, which is acceptable: the
+// breaker will simply re-learn the provider's health on the next request.
+
+type CBState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+class BackendCircuitBreaker {
+  private state: CBState = 'CLOSED';
+  private failures = 0;
+  private lastFailureAt = 0;
+  private halfOpenInFlight = false;
+
+  constructor(
+    readonly name: string,
+    private readonly threshold = 3,
+    private readonly resetMs = 30_000,
+  ) {}
+
+  isAvailable(): boolean {
+    if (this.state === 'CLOSED') return true;
+    if (this.state === 'OPEN') {
+      if (Date.now() - this.lastFailureAt >= this.resetMs) {
+        if (!this.halfOpenInFlight) {
+          this.state = 'HALF_OPEN';
+          return true;
+        }
+      }
+      return false;
+    }
+    return !this.halfOpenInFlight; // HALF_OPEN: one probe at a time
+  }
+
+  async call<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.isAvailable()) {
+      throw new Error(`CircuitOpen:${this.name}`);
+    }
+    if (this.state === 'HALF_OPEN') this.halfOpenInFlight = true;
+    try {
+      const result = await fn();
+      this.failures = 0;
+      this.halfOpenInFlight = false;
+      this.state = 'CLOSED';
+      return result;
+    } catch (err) {
+      this.failures++;
+      this.lastFailureAt = Date.now();
+      this.halfOpenInFlight = false;
+      if (this.state === 'HALF_OPEN' || this.failures >= this.threshold) {
+        this.state = 'OPEN';
+      }
+      throw err;
+    }
+  }
+}
+
+const rpcBreakers: Record<SupportedChain, BackendCircuitBreaker> = {
+  stellar:   new BackendCircuitBreaker('soroban-rpc',   3, 30_000),
+  avalanche: new BackendCircuitBreaker('avalanche-rpc', 3, 30_000),
+  sonic:     new BackendCircuitBreaker('sonic-rpc',     3, 30_000),
+};
+
 export type SupportedChain = 'stellar' | 'avalanche' | 'sonic';
 
 export interface CachedMarket {
@@ -517,30 +581,51 @@ async function syncChainMarkets(
     const contractId = c.env?.MARKET_CONTRACT_ID ?? '';
     try {
       if (contractId) {
-        freshMarkets = await fetchMarketsFromStellar(rpcUrl, contractId);
+        freshMarkets = await rpcBreakers.stellar.call(() =>
+          fetchMarketsFromStellar(rpcUrl, contractId)
+        );
       }
     } catch (err) {
-      console.warn('Failed to fetch markets from Soroban RPC:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CircuitOpen:')) {
+        console.warn(`[markets] Soroban RPC circuit is OPEN — skipping fetch, using cache/D1`);
+      } else {
+        console.warn('Failed to fetch markets from Soroban RPC:', err);
+      }
     }
   } else if (chain === 'avalanche') {
     const rpcUrl = c.env?.AVALANCHE_RPC_URL ?? 'https://api.avax-test.network/ext/bc/C/rpc';
     const contractAddress = c.env?.AVALANCHE_CONTRACT_ADDRESS ?? '';
     try {
       if (contractAddress) {
-        freshMarkets = await fetchMarketsFromAvalanche(rpcUrl, contractAddress);
+        freshMarkets = await rpcBreakers.avalanche.call(() =>
+          fetchMarketsFromAvalanche(rpcUrl, contractAddress)
+        );
       }
     } catch (err) {
-      console.warn('Failed to fetch markets from Avalanche RPC:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CircuitOpen:')) {
+        console.warn(`[markets] Avalanche RPC circuit is OPEN — skipping fetch, using cache/D1`);
+      } else {
+        console.warn('Failed to fetch markets from Avalanche RPC:', err);
+      }
     }
   } else if (chain === 'sonic') {
     const rpcUrl = c.env?.SONIC_RPC_URL ?? 'https://rpc.testnet.soniclabs.com';
     const contractAddress = c.env?.SONIC_CONTRACT_ADDRESS ?? '';
     try {
       if (contractAddress) {
-        freshMarkets = await fetchMarketsFromSonic(rpcUrl, contractAddress);
+        freshMarkets = await rpcBreakers.sonic.call(() =>
+          fetchMarketsFromSonic(rpcUrl, contractAddress)
+        );
       }
     } catch (err) {
-      console.warn('Failed to fetch markets from Sonic RPC:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CircuitOpen:')) {
+        console.warn(`[markets] Sonic RPC circuit is OPEN — skipping fetch, using cache/D1`);
+      } else {
+        console.warn('Failed to fetch markets from Sonic RPC:', err);
+      }
     }
   }
 
@@ -599,21 +684,25 @@ async function syncChainMarkets(
         console.warn(`D1 marketCache write error for chain ${chain}:`, dbErr);
       }
 
-      // Write price history snapshots (best-effort, non-blocking)
+      // Write price history snapshots — atomic via unique constraint.
+      // The unique index on (market_key, pools) means two Worker instances
+      // racing to insert the same snapshot both succeed without error:
+      // the first wins, the second is a no-op. No read-compare-insert needed.
       try {
-        const db = drizzle(c.env.DB);
         for (const m of freshMarkets) {
           const totalPool = m.pools.reduce((a, b) => a + b, 0);
-          if (totalPool > 0) {
-            await db.insert(priceHistory).values({
-              marketKey: `${m.chain}:${m.id}`,
-              chain: m.chain,
-              marketId: m.id,
-              timestamp: now,
-              pools: JSON.stringify(m.pools),
-              totalPool,
-            });
-          }
+          if (totalPool <= 0) continue;
+
+          const poolsJson = JSON.stringify(m.pools);
+          const marketKey = `${m.chain}:${m.id}`;
+
+          await (c.env.DB as D1Database)
+            .prepare(
+              `INSERT OR IGNORE INTO price_history (market_key, chain, market_id, timestamp, pools, total_pool)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            )
+            .bind(marketKey, m.chain, m.id, now, poolsJson, totalPool)
+            .run();
         }
       } catch {
         // Non-critical — silently ignore snapshot write failures
