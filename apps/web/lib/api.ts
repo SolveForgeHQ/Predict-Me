@@ -1,33 +1,13 @@
 /**
  * api.ts
- * Thin fetch wrapper that automatically attaches the session JWT to every
- * request and throws a typed error when the server responds with a non-2xx
- * status.
- *
- * Usage:
- *   import { apiFetch } from "@/lib/api";
- *   const data = await apiFetch<Market[]>("/markets");
+ * Thin fetch wrapper. Authentication is handled via an HttpOnly session
+ * cookie set by the backend — JS never touches the token directly.
+ * `credentials: "include"` tells the browser to send the cookie on every
+ * cross-origin request to the backend.
  */
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8787";
-
-const SESSION_KEY = "predict-me:session";
-
-// ── Token helpers ─────────────────────────────────────────────
-
-export function storeSessionToken(token: string): void {
-  if (typeof window !== "undefined") localStorage.setItem(SESSION_KEY, token);
-}
-
-export function getSessionToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(SESSION_KEY);
-}
-
-export function clearSessionToken(): void {
-  if (typeof window !== "undefined") localStorage.removeItem(SESSION_KEY);
-}
 
 // ── Typed error ───────────────────────────────────────────────
 
@@ -47,16 +27,17 @@ export async function apiFetch<T = unknown>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const token = getSessionToken();
-
   const headers = new Headers(init.headers);
   headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${BACKEND_URL}${path}`, { ...init, headers });
+  const res = await fetch(`${BACKEND_URL}${path}`, {
+    ...init,
+    headers,
+    // Send the HttpOnly session cookie on every request.
+    credentials: "include",
+  });
 
   if (!res.ok) {
-    // Try to pull a message from the JSON body, fall back to status text
     let message = `Request failed: ${res.status} ${res.statusText}`;
     try {
       const body = (await res.json()) as { error?: string };

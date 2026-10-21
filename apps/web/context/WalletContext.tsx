@@ -21,8 +21,7 @@ import {
   WalletError,
   type WalletErrorCode,
 } from "@/lib/wallet";
-import { loginWithWallet } from "@/lib/auth";
-import { clearSessionToken } from "@/lib/api";
+import { loginWithWallet, logoutFromBackend } from "@/lib/auth";
 import { useChain, CHAIN_METADATA } from "@/context/ChainContext";
 import { useAccount, useDisconnect, useSwitchChain } from "wagmi";
 import { avalancheFuji } from "viem/chains";
@@ -119,7 +118,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const disconnectStellar = useCallback(async () => {
     await disconnectStellarWallet();
-    clearSessionToken();
+    await logoutFromBackend();
     setStellarPublicKey(null);
     setStellarError(null);
   }, []);
