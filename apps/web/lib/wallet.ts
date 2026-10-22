@@ -155,7 +155,7 @@ export async function connectWallet(): Promise<string> {
     if (msg.toLowerCase().includes("not installed") || msg.toLowerCase().includes("not found")) {
       throw new WalletError("NOT_INSTALLED", msg);
     }
-    throw new WalletError("UNKNOWN", msg instanceof Error ? (msg as any).message : String(msg));
+    throw new WalletError("UNKNOWN", String(msg));
   }
 
   // Verify the connected network if supported by the wallet module
