@@ -4,10 +4,9 @@ import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
-import { LogOut, Copy, Check, Loader2, ExternalLink, Shield } from "lucide-react";
+import { LogOut, Copy, Check, Loader2, ExternalLink, Shield, ArrowLeftRight } from "lucide-react";
 import ChainSwitcher from "@/components/ChainSwitcher";
-import { useChain } from "@/context/ChainContext";
-import { useAccountModal } from "@rainbow-me/rainbowkit";
+import { useChain, CHAIN_METADATA, SELECTABLE_CHAINS } from "@/context/ChainContext";
 
 function formatAddress(address: string): string {
   if (address.startsWith("0x")) {
@@ -29,8 +28,7 @@ export default function TopBar() {
     disconnect,
     clearError,
   } = useWallet();
-  const { chain, chainMetadata, client } = useChain();
-  const { openAccountModal } = useAccountModal();
+  const { chain, chainMetadata, client, setChain } = useChain();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -145,9 +143,8 @@ export default function TopBar() {
               </Link>
             )}
 
-            {/* ChainSwitcher hidden — Sonic only for now. Re-enable when multi-chain is ready.
+            {/* Chain selector — Sonic and Avalanche */}
             <ChainSwitcher />
-            */}
 
             {/* Wallet button area */}
             <div className="relative" ref={dropdownRef}>
@@ -257,22 +254,52 @@ export default function TopBar() {
                   {copied ? "Copied!" : "Copy address"}
                 </button>
 
-                {/* RainbowKit Account Details Modal (EVM chains only) */}
-                {isEvm && openAccountModal && (
-                  <button
-                    onClick={() => {
-                      setDropdownOpen(false);
-                      openAccountModal();
-                    }}
+                {/* View on explorer */}
+                {publicKey && (
+                  <a
+                    href={`${chainMetadata.explorerBaseUrl}/address/${publicKey}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setDropdownOpen(false)}
                     className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left"
                     style={{ color: "#F2F4F7" }}
                     onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
                   >
                     <ExternalLink size={14} />
-                    Wallet details
-                  </button>
+                    View on {chainMetadata.shortName}Scan
+                  </a>
                 )}
+
+                {/* Switch chain (inline mini-selector) */}
+                <div style={{ borderTop: "1px solid #1E2435", marginTop: "2px", paddingTop: "2px" }}>
+                  <div className="px-4 py-1.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8B93A7" }}>
+                      Switch Network
+                    </p>
+                  </div>
+                  {SELECTABLE_CHAINS.map((id) => {
+                    const m = CHAIN_METADATA[id];
+                    const isActive = id === chain;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          setChain(id);
+                          setDropdownOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-sm transition-colors text-left"
+                        style={{ color: isActive ? m.color : "#8B93A7" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                      >
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: m.color }} />
+                        {m.name}
+                        {isActive && <Check size={12} style={{ marginLeft: "auto" }} />}
+                      </button>
+                    );
+                  })}
+                </div>
 
                 {/* Admin Panel (admin only) */}
                 {isAdmin && (
