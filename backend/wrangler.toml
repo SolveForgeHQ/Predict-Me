@@ -16,6 +16,12 @@ FRONTEND_ORIGIN = "http://localhost:3000"
 SONIC_RPC_URL = "https://rpc.testnet.soniclabs.com"
 SONIC_CONTRACT_ADDRESS = "0x25D035CB295d94A073107aAB9Ac86a3655a5614E"
 SONIC_TOKEN_ADDRESS = "0x96Ef7Fb36E31445920EFC305Cc0D9C0288af7D02"
+# First block to scan when there is no indexer_state row yet.
+# Set this to the block your contract was deployed in to avoid scanning from 0.
+SONIC_START_BLOCK = "19241084"
+
+[triggers]
+crons = ["* * * * *"]
 
 [observability]
 enabled = true

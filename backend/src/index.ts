@@ -3,11 +3,15 @@ import { cors } from 'hono/cors';
 import markets from './routes/markets';
 import auth from './routes/auth';
 import usersRoute from './routes/users';
+import { runSonicIndexer } from './indexer/sonic';
 
 interface EnvBindings {
-  FRONTEND_ORIGIN?: string;
-  JWT_SECRET: string;
-  DB?: D1Database;
+  FRONTEND_ORIGIN?:        string;
+  JWT_SECRET:              string;
+  DB?:                     D1Database;
+  SONIC_RPC_URL?:          string;
+  SONIC_CONTRACT_ADDRESS?: string;
+  SONIC_START_BLOCK?:      string;
 }
 
 const app = new Hono<{ Bindings: EnvBindings }>();
@@ -68,4 +72,33 @@ app.route('/markets', markets);
 app.route('/auth', auth);
 app.route('/users', usersRoute);   // all /users/* require a valid session
 
-export default app;
+// ── Cron handler — Cloudflare Scheduled Worker ───────────────
+// Triggered every minute via the schedule in wrangler.toml.
+// Also callable directly from tests via `scheduled(event, env, ctx)`.
+const scheduled: ExportedHandlerScheduledHandler<EnvBindings> = async (_event, env, _ctx) => {
+  if (!env.DB) {
+    console.warn('[cron] D1 binding not available — skipping indexer');
+    return;
+  }
+  try {
+    const result = await runSonicIndexer({
+      DB:                    env.DB,
+      SONIC_RPC_URL:         env.SONIC_RPC_URL,
+      SONIC_CONTRACT_ADDRESS:env.SONIC_CONTRACT_ADDRESS,
+      SONIC_START_BLOCK:     env.SONIC_START_BLOCK,
+    });
+    if (result.skipped) {
+      console.log('[indexer] Already up to date — nothing to do');
+    } else {
+      console.log(
+        `[indexer] Done — ranges=${result.rangesProcessed} ` +
+        `decoded=${result.logsDecoded} inserted=${result.rowsInserted} ` +
+        `blocks=${result.fromBlock}→${result.toBlock}`,
+      );
+    }
+  } catch (err) {
+    console.error('[indexer] Unhandled error:', err);
+  }
+};
+
+export default { ...app, scheduled } as ExportedHandler<EnvBindings>;
