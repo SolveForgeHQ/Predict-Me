@@ -35,17 +35,17 @@ export default function TradePanel({ market }: Props) {
   const [errorMsg, setErrorMsg] = useState("");
   const [txHash, setTxHash] = useState("");
 
-  // Sonic ERC-20 specific state
-  const isSonic = chain === "sonic";
-  const [tokenSymbol, setTokenSymbol] = useState<string | null>(null);
-  const [tokenDecimals, setTokenDecimals] = useState<number>(6);
-  const [allowance, setAllowance] = useState<bigint>(0n);
-  const [allowanceChecked, setAllowanceChecked] = useState(false);
-  const [mintPending, setMintPending] = useState(false);
-  const [mintTxHash, setMintTxHash] = useState("");
+  // Sonic ERC-20 specific state — kept for future re-enable
+  const isSonic = false;
+  const [tokenSymbol] = useState<string | null>(null);
+  const [tokenDecimals] = useState<number>(6);
+  const [allowance] = useState<bigint>(0n);
+  const [allowanceChecked] = useState(false);
+  const [mintPending] = useState(false);
+  const [mintTxHash] = useState("");
 
-  // The trade currency: for Sonic it's the ERC-20 token symbol, for others it's the native gas token
-  const currency = isSonic && tokenSymbol ? tokenSymbol : chainMetadata.currency;
+  // The trade currency
+  const currency = chainMetadata.currency;
 
   const isPending = pendingStep !== null;
   const selectedLabel = outcomes[selectedIndex] ?? `Outcome ${selectedIndex + 1}`;
@@ -62,8 +62,6 @@ export default function TradePanel({ market }: Props) {
       case "confirming":
         return chain === "avalanche"
           ? "Waiting for block confirmation on Avalanche…"
-          : chain === "sonic"
-          ? "Waiting for block confirmation on Sonic…"
           : "Confirming on Stellar ledger…";
     }
   };

@@ -80,8 +80,8 @@ export default function AdminPage() {
   const [isLoadingOwner, setIsLoadingOwner] = useState(false);
 
   const isAvalanche = chain === "avalanche";
-  const isSonic = chain === "sonic";
-  const isEvm = isAvalanche || isSonic;
+  const isSonic = false; // Sonic removed from UI
+  const isEvm = isAvalanche;
 
   // Query contract owner when on an EVM chain (both Avalanche and Sonic have getOwner)
   useEffect(() => {
