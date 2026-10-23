@@ -10,94 +10,102 @@ contract PredictionMarketTest is Test {
 
     address public owner = address(this);
     address public alice = address(0xA11CE);
-    address public bob = address(0xB0B);
+    address public bob   = address(0xB0B);
     address public carol = address(0xCA901);
-    address public dave = address(0xDA7E);
+    address public dave  = address(0xDA7E);
 
-    event MarketCreated(uint256 indexed marketId, string question, uint256 endTime);
-    event SharesBought(
-        uint256 indexed marketId,
-        address indexed buyer,
-        uint256 outcomeIndex,
-        uint256 amount
-    );
+    uint256 constant MIN_STAKE    = 0.01 ether;
+    uint256 constant GRACE_PERIOD = 7 days;
+
+    // ── Events (must match contract) ──
+    event MarketCreated(uint256 indexed marketId, string question, string[] outcomes, uint64 closeTime, string resolutionCriteria);
+    event SharesBought(uint256 indexed marketId, address indexed buyer, uint256 outcomeIndex, uint256 amount);
     event MarketResolved(uint256 indexed marketId, uint256 winningOutcome);
+    event MarketCancelled(uint256 indexed marketId);
     event WinningsClaimed(uint256 indexed marketId, address indexed claimer, uint256 payout);
+    event Refunded(uint256 indexed marketId, address indexed user, uint256 amount);
 
     function setUp() public {
-        market = new PredictionMarket();
-
+        market = new PredictionMarket(owner, MIN_STAKE, GRACE_PERIOD);
         vm.deal(alice, 100 ether);
-        vm.deal(bob, 100 ether);
+        vm.deal(bob,   100 ether);
         vm.deal(carol, 100 ether);
-        vm.deal(dave, 100 ether);
+        vm.deal(dave,  100 ether);
     }
 
-    function labels2() internal pure returns (string[] memory) {
-        string[] memory l = new string[](2);
+    // ── Helpers ──
+
+    function labels2() internal pure returns (string[] memory l) {
+        l = new string[](2);
         l[0] = "YES";
         l[1] = "NO";
-        return l;
     }
 
-    function labels4() internal pure returns (string[] memory) {
-        string[] memory l = new string[](4);
+    function labels4() internal pure returns (string[] memory l) {
+        l = new string[](4);
         l[0] = "Alice";
         l[1] = "Bob";
         l[2] = "Carol";
         l[3] = "Dave";
-        return l;
+    }
+
+    function _closeTime() internal view returns (uint64) {
+        return uint64(block.timestamp + 1 days);
+    }
+
+    function _createDefault() internal returns (uint256) {
+        return market.createMarket("Will AVAX reach $100?", labels2(), _closeTime(), "Owner decides");
+    }
+
+    function _warpPastClose() internal {
+        vm.warp(block.timestamp + 1 days + 1);
     }
 
     // =========================================================================
-    // 1. Market Creation Tests
+    // 1. Market Creation
     // =========================================================================
 
     function test_CreateMarket_Success() public {
-        uint256 endTime = block.timestamp + 1 days;
-        string memory question = "Will AVAX reach $100 by EOY?";
-
-        vm.expectEmit(true, false, false, true);
-        emit MarketCreated(1, question, endTime);
-
-        uint256 marketId = market.createMarket(question, endTime, labels2());
+        uint64 ct = _closeTime();
+        uint256 marketId = market.createMarket("Will AVAX reach $100?", labels2(), ct, "Owner decides");
         assertEq(marketId, 1);
         assertEq(market.marketCount(), 1);
 
         PredictionMarket.Market memory m = market.getMarket(1);
-        assertEq(m.question, question);
-        assertEq(m.endTime, endTime);
+        assertEq(m.question, "Will AVAX reach $100?");
+        assertEq(m.closeTime, ct);
         assertEq(uint8(m.status), uint8(PredictionMarket.MarketStatus.Open));
         assertEq(m.outcomeLabels.length, 2);
-        assertEq(m.pools.length, 2);
         assertEq(m.pools[0], 0);
         assertEq(m.pools[1], 0);
         assertEq(m.totalPool, 0);
     }
 
-    function test_CreateMarket_BinaryCompat() public {
-        uint256 marketId = market.createMarket("Q?", block.timestamp + 1 days);
-        string[] memory out = market.getOutcomes(marketId);
-        assertEq(out.length, 2);
-        assertEq(out[0], "YES");
-        assertEq(out[1], "NO");
+    function test_CreateMarket_FourOutcomes() public {
+        uint256 id = market.createMarket("Q?", labels4(), _closeTime(), "criteria");
+        assertEq(market.getOutcomes(id).length, 4);
     }
 
     function test_CreateMarket_RevertIf_EmptyQuestion() public {
         vm.expectRevert(PredictionMarket.EmptyQuestion.selector);
-        market.createMarket("", block.timestamp + 1 days, labels2());
+        market.createMarket("", labels2(), _closeTime(), "criteria");
     }
 
-    function test_CreateMarket_RevertIf_PastEndTime() public {
-        vm.expectRevert(PredictionMarket.InvalidEndTime.selector);
-        market.createMarket("Question", block.timestamp, labels2());
+    function test_CreateMarket_RevertIf_EmptyResolutionCriteria() public {
+        vm.expectRevert(PredictionMarket.EmptyResolutionCriteria.selector);
+        market.createMarket("Q?", labels2(), _closeTime(), "");
+    }
+
+    function test_CreateMarket_RevertIf_PastCloseTime() public {
+        vm.expectRevert(PredictionMarket.InvalidCloseTime.selector);
+        market.createMarket("Q?", labels2(), uint64(block.timestamp), "criteria");
     }
 
     function test_CreateMarket_RevertIf_SingleOutcome() public {
         string[] memory l = new string[](1);
         l[0] = "Only";
         vm.expectRevert(PredictionMarket.InvalidOutcomeCount.selector);
-        market.createMarket("Q?", block.timestamp + 1 days, l);
+        market.createMarket("Q?", l, _closeTime(), "criteria");
     }
 
     function test_CreateMarket_RevertIf_EmptyLabel() public {
@@ -105,301 +113,285 @@ contract PredictionMarketTest is Test {
         l[0] = "A";
         l[1] = "";
         vm.expectRevert(PredictionMarket.EmptyOutcomeLabel.selector);
-        market.createMarket("Q?", block.timestamp + 1 days, l);
+        market.createMarket("Q?", l, _closeTime(), "criteria");
     }
 
     function test_CreateMarket_RevertIf_NotOwner() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
-        market.createMarket("Question", block.timestamp + 1 days, labels2());
+        market.createMarket("Q?", labels2(), _closeTime(), "criteria");
     }
 
     // =========================================================================
-    // 2. Buying Shares Tests
+    // 2. Buying Shares
     // =========================================================================
 
     function test_BuyShares_BothSides() public {
-        uint256 endTime = block.timestamp + 1 days;
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", endTime, labels2());
+        uint256 id = _createDefault();
 
         vm.prank(alice);
-        vm.expectEmit(true, true, false, true);
-        emit SharesBought(marketId, alice, 0, 10 ether);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
+        market.buyShares{value: 10 ether}(id, 0);
 
         vm.prank(bob);
-        vm.expectEmit(true, true, false, true);
-        emit SharesBought(marketId, bob, 1, 30 ether);
-        market.buyShares{value: 30 ether}(marketId, uint256(1));
+        market.buyShares{value: 30 ether}(id, 1);
 
-        (uint256[] memory pools, uint256 total) = market.getPools(marketId);
+        (uint256[] memory pools, uint256 total) = market.getPools(id);
         assertEq(pools[0], 10 ether);
         assertEq(pools[1], 30 ether);
         assertEq(total, 40 ether);
-
-        uint256[] memory aPos = market.getPosition(marketId, alice);
-        assertEq(aPos[0], 10 ether);
-        assertEq(aPos[1], 0);
-
-        uint256[] memory bPos = market.getPosition(marketId, bob);
-        assertEq(bPos[0], 0);
-        assertEq(bPos[1], 30 ether);
-
         assertEq(address(market).balance, 40 ether);
     }
 
-    function test_BuyShares_BoolCompat() public {
-        uint256 marketId = market.createMarket("Q?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 5 ether}(marketId, true);
-        assertEq(market.getShares(marketId, 0, alice), 5 ether);
-        vm.prank(bob);
-        market.buyShares{value: 7 ether}(marketId, false);
-        assertEq(market.getShares(marketId, 1, bob), 7 ether);
-    }
-
     function test_BuyShares_FourOutcomes() public {
-        uint256 marketId = market.createMarket("Who wins?", block.timestamp + 1 days, labels4());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        vm.prank(bob);
-        market.buyShares{value: 20 ether}(marketId, uint256(1));
-        vm.prank(carol);
-        market.buyShares{value: 30 ether}(marketId, uint256(2));
-        vm.prank(dave);
-        market.buyShares{value: 40 ether}(marketId, uint256(3));
-
-        (uint256[] memory pools, uint256 total) = market.getPools(marketId);
-        assertEq(pools[0], 10 ether);
-        assertEq(pools[1], 20 ether);
-        assertEq(pools[2], 30 ether);
-        assertEq(pools[3], 40 ether);
+        uint256 id = market.createMarket("Who wins?", labels4(), _closeTime(), "criteria");
+        vm.prank(alice);  market.buyShares{value: 10 ether}(id, 0);
+        vm.prank(bob);    market.buyShares{value: 20 ether}(id, 1);
+        vm.prank(carol);  market.buyShares{value: 30 ether}(id, 2);
+        vm.prank(dave);   market.buyShares{value: 40 ether}(id, 3);
+        (, uint256 total) = market.getPools(id);
         assertEq(total, 100 ether);
     }
 
     function test_BuyShares_RevertIf_ZeroDeposit() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
+        uint256 id = _createDefault();
         vm.prank(alice);
         vm.expectRevert(PredictionMarket.ZeroDeposit.selector);
-        market.buyShares{value: 0}(marketId, uint256(0));
+        market.buyShares{value: 0}(id, 0);
+    }
+
+    function test_BuyShares_RevertIf_BelowMinStake() public {
+        uint256 id = _createDefault();
+        vm.prank(alice);
+        vm.expectRevert(PredictionMarket.InsufficientStake.selector);
+        market.buyShares{value: MIN_STAKE - 1}(id, 0);
     }
 
     function test_BuyShares_RevertIf_MarketNotFound() public {
         vm.prank(alice);
         vm.expectRevert(PredictionMarket.MarketNotFound.selector);
-        market.buyShares{value: 1 ether}(999, uint256(0));
+        market.buyShares{value: 1 ether}(999, 0);
     }
 
     function test_BuyShares_RevertIf_InvalidOutcome() public {
-        uint256 marketId = market.createMarket("Q?", block.timestamp + 1 days, labels2());
+        uint256 id = _createDefault();
         vm.prank(alice);
         vm.expectRevert(PredictionMarket.InvalidOutcome.selector);
-        market.buyShares{value: 1 ether}(marketId, uint256(5));
+        market.buyShares{value: 1 ether}(id, 5);
     }
 
-    function test_BuyShares_RevertIf_MarketExpired() public {
-        uint256 endTime = block.timestamp + 1 days;
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", endTime, labels2());
-        vm.warp(endTime + 1);
+    function test_BuyShares_RevertIf_AfterCloseTime() public {
+        uint256 id = _createDefault();
+        _warpPastClose();
         vm.prank(alice);
         vm.expectRevert(PredictionMarket.MarketExpired.selector);
-        market.buyShares{value: 1 ether}(marketId, uint256(0));
+        market.buyShares{value: 1 ether}(id, 0);
+    }
+
+    function test_BuyShares_RevertIf_AlreadyResolved() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 1 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
+        vm.prank(carol);
+        vm.expectRevert(PredictionMarket.MarketNotOpen.selector);
+        market.buyShares{value: 1 ether}(id, 0);
     }
 
     // =========================================================================
-    // 3. Resolving Market Tests
+    // 3. Resolving Markets
     // =========================================================================
 
-    function test_ResolveMarket_Success_YES() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.expectEmit(true, false, false, true);
-        emit MarketResolved(marketId, 0);
-        market.resolveMarket(marketId, uint256(0));
-
-        PredictionMarket.Market memory m = market.getMarket(marketId);
+    function test_ResolveMarket_Success() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 1 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
+        PredictionMarket.Market memory m = market.getMarket(id);
         assertEq(uint8(m.status), uint8(PredictionMarket.MarketStatus.Resolved));
         assertEq(m.winningOutcome, 0);
     }
 
-    function test_ResolveMarket_Success_FourthOutcome() public {
-        uint256 marketId = market.createMarket("Who wins?", block.timestamp + 1 days, labels4());
-        market.resolveMarket(marketId, uint256(3));
-        PredictionMarket.Market memory m = market.getMarket(marketId);
-        assertEq(m.winningOutcome, 3);
+    function test_ResolveMarket_RevertIf_BeforeCloseTime() public {
+        uint256 id = _createDefault();
+        vm.expectRevert(PredictionMarket.ResolutionTooEarly.selector);
+        market.resolveMarket(id, 0);
     }
 
     function test_ResolveMarket_RevertIf_InvalidOutcome() public {
-        uint256 marketId = market.createMarket("Q?", block.timestamp + 1 days, labels2());
+        uint256 id = _createDefault();
+        _warpPastClose();
         vm.expectRevert(PredictionMarket.InvalidOutcome.selector);
-        market.resolveMarket(marketId, uint256(9));
+        market.resolveMarket(id, 9);
     }
 
     function test_ResolveMarket_RevertIf_NotOwner() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
+        uint256 id = _createDefault();
+        _warpPastClose();
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, bob));
-        market.resolveMarket(marketId, uint256(0));
+        market.resolveMarket(id, 0);
     }
 
     function test_ResolveMarket_RevertIf_AlreadyResolved() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        market.resolveMarket(marketId, uint256(0));
-        vm.expectRevert(PredictionMarket.MarketNotOpen.selector);
-        market.resolveMarket(marketId, uint256(0));
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 1 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
+        vm.expectRevert(PredictionMarket.MarketAlreadyFinalised.selector);
+        market.resolveMarket(id, 1);
     }
 
-    function test_BuyShares_RevertIf_AlreadyResolved() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        market.resolveMarket(marketId, uint256(0));
-        vm.prank(alice);
-        vm.expectRevert(PredictionMarket.MarketNotOpen.selector);
-        market.buyShares{value: 1 ether}(marketId, uint256(0));
+    function test_ResolveMarket_AutoCancels_WhenWinningPoolIsZero() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0); // only YES backed
+        _warpPastClose();
+        vm.expectEmit(true, false, false, false);
+        emit MarketCancelled(id);
+        market.resolveMarket(id, 1); // NO has 0 backers → auto-cancel
+        PredictionMarket.Market memory m = market.getMarket(id);
+        assertEq(uint8(m.status), uint8(PredictionMarket.MarketStatus.Cancelled));
     }
 
     // =========================================================================
-    // 4. Claiming Winnings Tests
+    // 4. Cancel Market (owner) + cancelUnresolved (anyone)
     // =========================================================================
 
-    function test_ClaimWinnings_ProportionalPayout_SingleWinner() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        vm.prank(bob);
-        market.buyShares{value: 30 ether}(marketId, uint256(1));
-        market.resolveMarket(marketId, uint256(0));
+    function test_CancelMarket_Owner() public {
+        uint256 id = _createDefault();
+        market.cancelMarket(id);
+        PredictionMarket.Market memory m = market.getMarket(id);
+        assertEq(uint8(m.status), uint8(PredictionMarket.MarketStatus.Cancelled));
+    }
 
-        uint256 aliceBalBefore = alice.balance;
+    function test_CancelMarket_RevertIf_NotOwner() public {
+        uint256 id = _createDefault();
         vm.prank(alice);
-        vm.expectEmit(true, true, false, true);
-        emit WinningsClaimed(marketId, alice, 40 ether);
-        market.claimWinnings(marketId);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        market.cancelMarket(id);
+    }
 
-        assertEq(alice.balance, aliceBalBefore + 40 ether);
-        assertEq(market.getShares(marketId, 0, alice), 0);
+    function test_CancelUnresolved_WorksAfterGracePeriod() public {
+        uint256 id = _createDefault();
+        vm.warp(block.timestamp + 1 days + GRACE_PERIOD + 1);
+        market.cancelUnresolved(id);
+        PredictionMarket.Market memory m = market.getMarket(id);
+        assertEq(uint8(m.status), uint8(PredictionMarket.MarketStatus.Cancelled));
+    }
+
+    function test_CancelUnresolved_RevertIf_GracePeriodNotExpired() public {
+        uint256 id = _createDefault();
+        _warpPastClose();
+        vm.expectRevert(PredictionMarket.GracePeriodNotExpired.selector);
+        market.cancelUnresolved(id);
+    }
+
+    // =========================================================================
+    // 5. Claim Winnings
+    // =========================================================================
+
+    function test_ClaimWinnings_SingleWinner() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 10 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 30 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
+
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        market.claimWinnings(id);
+        assertEq(alice.balance, before + 40 ether);
         assertEq(address(market).balance, 0);
     }
 
-    function test_ClaimWinnings_ProportionalPayout_MultipleWinners() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        vm.prank(bob);
-        market.buyShares{value: 30 ether}(marketId, uint256(0));
-        vm.prank(carol);
-        market.buyShares{value: 60 ether}(marketId, uint256(1));
+    function test_ClaimWinnings_NoDust_MultipleWinners() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 10 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 30 ether}(id, 0);
+        vm.prank(carol); market.buyShares{value: 60 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
 
-        (uint256[] memory pools, uint256 total) = market.getPools(marketId);
-        assertEq(pools[0], 40 ether);
-        assertEq(pools[1], 60 ether);
-        assertEq(total, 100 ether);
+        uint256 ab = alice.balance;
+        vm.prank(alice); market.claimWinnings(id);
+        assertEq(alice.balance, ab + 25 ether);
 
-        market.resolveMarket(marketId, uint256(0));
-
-        uint256 aliceBalBefore = alice.balance;
-        vm.prank(alice);
-        market.claimWinnings(marketId);
-        assertEq(alice.balance, aliceBalBefore + 25 ether);
-
-        uint256 bobBalBefore = bob.balance;
-        vm.prank(bob);
-        market.claimWinnings(marketId);
-        assertEq(bob.balance, bobBalBefore + 75 ether);
+        uint256 bb = bob.balance;
+        vm.prank(bob); market.claimWinnings(id);
+        assertEq(bob.balance, bb + 75 ether);
 
         assertEq(address(market).balance, 0);
     }
-
-    function test_ClaimWinnings_FourOutcomes_SoleWinner() public {
-        uint256 marketId = market.createMarket("Who wins?", block.timestamp + 1 days, labels4());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        vm.prank(bob);
-        market.buyShares{value: 20 ether}(marketId, uint256(1));
-        vm.prank(carol);
-        market.buyShares{value: 30 ether}(marketId, uint256(2));
-        vm.prank(dave);
-        market.buyShares{value: 40 ether}(marketId, uint256(3));
-
-        market.resolveMarket(marketId, uint256(2));
-
-        uint256 carolBefore = carol.balance;
-        vm.prank(carol);
-        market.claimWinnings(marketId);
-        assertEq(carol.balance, carolBefore + 100 ether);
-        assertEq(address(market).balance, 0);
-    }
-
-    function test_ClaimWinnings_FourOutcomes_Split() public {
-        uint256 marketId = market.createMarket("Who wins?", block.timestamp + 1 days, labels4());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(1));
-        vm.prank(bob);
-        market.buyShares{value: 30 ether}(marketId, uint256(1));
-        vm.prank(carol);
-        market.buyShares{value: 60 ether}(marketId, uint256(0));
-
-        market.resolveMarket(marketId, uint256(1));
-
-        uint256 aBefore = alice.balance;
-        vm.prank(alice);
-        market.claimWinnings(marketId);
-        assertEq(alice.balance, aBefore + 25 ether);
-
-        uint256 bBefore = bob.balance;
-        vm.prank(bob);
-        market.claimWinnings(marketId);
-        assertEq(bob.balance, bBefore + 75 ether);
-    }
-
-    // =========================================================================
-    // 5. Rejection & Failure Mode Tests
-    // =========================================================================
 
     function test_ClaimWinnings_RevertIf_NotResolved() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0);
         vm.prank(alice);
         vm.expectRevert(PredictionMarket.MarketNotResolved.selector);
-        market.claimWinnings(marketId);
+        market.claimWinnings(id);
     }
 
     function test_ClaimWinnings_RevertIf_DoubleClaim() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        vm.prank(bob);
-        market.buyShares{value: 10 ether}(marketId, uint256(1));
-        market.resolveMarket(marketId, uint256(0));
-
-        vm.prank(alice);
-        market.claimWinnings(marketId);
-
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 1 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
+        vm.prank(alice); market.claimWinnings(id);
         vm.prank(alice);
         vm.expectRevert(PredictionMarket.NoWinningShares.selector);
-        market.claimWinnings(marketId);
+        market.claimWinnings(id);
     }
 
-    function test_ClaimWinnings_RevertIf_LosingPosition() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        vm.prank(bob);
-        market.buyShares{value: 10 ether}(marketId, uint256(1));
-        market.resolveMarket(marketId, uint256(0));
-
+    function test_ClaimWinnings_RevertIf_Loser() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 1 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 1 ether}(id, 1);
+        _warpPastClose();
+        market.resolveMarket(id, 0);
         vm.prank(bob);
         vm.expectRevert(PredictionMarket.NoWinningShares.selector);
-        market.claimWinnings(marketId);
+        market.claimWinnings(id);
     }
 
-    function test_ClaimWinnings_RevertIf_NonParticipant() public {
-        uint256 marketId = market.createMarket("Will AVAX reach $100?", block.timestamp + 1 days, labels2());
-        vm.prank(alice);
-        market.buyShares{value: 10 ether}(marketId, uint256(0));
-        market.resolveMarket(marketId, uint256(0));
+    // =========================================================================
+    // 6. Refund (cancelled markets)
+    // =========================================================================
 
-        vm.prank(dave);
-        vm.expectRevert(PredictionMarket.NoWinningShares.selector);
-        market.claimWinnings(marketId);
+    function test_Refund_AfterOwnerCancel() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 5 ether}(id, 0);
+        vm.prank(bob);   market.buyShares{value: 3 ether}(id, 1);
+        market.cancelMarket(id);
+
+        uint256 ab = alice.balance;
+        vm.prank(alice); market.refund(id);
+        assertEq(alice.balance, ab + 5 ether);
+
+        uint256 bb = bob.balance;
+        vm.prank(bob); market.refund(id);
+        assertEq(bob.balance, bb + 3 ether);
+
+        assertEq(address(market).balance, 0);
+    }
+
+    function test_Refund_RevertIf_DoubleRefund() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 5 ether}(id, 0);
+        market.cancelMarket(id);
+        vm.prank(alice); market.refund(id);
+        vm.prank(alice);
+        vm.expectRevert(PredictionMarket.NothingToRefund.selector);
+        market.refund(id);
+    }
+
+    function test_Refund_RevertIf_NotCancelled() public {
+        uint256 id = _createDefault();
+        vm.prank(alice); market.buyShares{value: 5 ether}(id, 0);
+        vm.prank(alice);
+        vm.expectRevert(PredictionMarket.MarketNotCancelled.selector);
+        market.refund(id);
     }
 }

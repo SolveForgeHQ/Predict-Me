@@ -7,48 +7,68 @@ import "../src/PredictionMarket.sol";
 
 /**
  * @title DeployPredictionMarket
- * @notice Foundry deployment script for PredictionMarket targeting Avalanche Fuji testnet or Avalanche Mainnet.
- * 
+ * @notice Foundry deployment script for PredictionMarket targeting Avalanche Fuji testnet.
+ *
+ * Environment variables:
+ *   PRIVATE_KEY           — deployer private key (with or without 0x prefix)  [required]
+ *   OWNER_ADDRESS         — market owner address (defaults to deployer)        [optional]
+ *   MIN_STAKE             — minimum AVAX per buyShares in wei (default: 0.01 AVAX = 1e16) [optional]
+ *   GRACE_PERIOD          — resolution grace period in seconds (default: 604800 = 7 days)  [optional]
+ *
  * Usage:
  *   forge script script/DeployPredictionMarket.s.sol:DeployPredictionMarket \
  *     --rpc-url $FUJI_RPC_URL \
+ *     --private-key $PRIVATE_KEY \
  *     --broadcast \
- *     --verify \
  *     -vvvv
  */
 contract DeployPredictionMarket is Script {
     function run() external returns (PredictionMarket) {
-        // Read private key from environment (supports PRIVATE_KEY or DEPLOYER_PRIVATE_KEY,
-        // with or without 0x prefix — see .env.example).
         uint256 deployerPrivateKey = _readPrivateKey();
+        address deployerAddress    = vm.addr(deployerPrivateKey);
 
-        address deployerAddress = vm.addr(deployerPrivateKey);
+        // Owner defaults to deployer if not set
+        string memory ownerStr = vm.envOr("OWNER_ADDRESS", string(""));
+        address ownerAddress   = bytes(ownerStr).length == 0
+            ? deployerAddress
+            : vm.parseAddress(ownerStr);
+
+        // 0.01 AVAX in wei = 1e16
+        uint256 minStake      = vm.envOr("MIN_STAKE",    uint256(1e16));
+        uint256 gracePeriod   = vm.envOr("GRACE_PERIOD", uint256(604800));
 
         console.log("==================================================");
         console.log("Deploying PredictionMarket to Avalanche Fuji Testnet");
-        console.log("Deployer Address:", deployerAddress);
-        console.log("Deployer Balance:", deployerAddress.balance);
-        console.log("Chain ID:        ", block.chainid);
+        console.log("Deployer:     ", deployerAddress);
+        console.log("Owner:        ", ownerAddress);
+        console.log("Min Stake:    ", minStake, "wei");
+        console.log("Grace Period: ", gracePeriod, "seconds");
+        console.log("Chain ID:     ", block.chainid);
         console.log("==================================================");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        PredictionMarket predictionMarket = new PredictionMarket();
+        PredictionMarket market = new PredictionMarket(
+            ownerAddress,
+            minStake,
+            gracePeriod
+        );
 
         vm.stopBroadcast();
 
         console.log("\n==================================================");
         console.log(" Deployment Successful!");
         console.log("==================================================");
-        console.log("Contract Address:", address(predictionMarket));
-        console.log("Contract Owner:  ", predictionMarket.owner());
+        console.log("Contract Address:", address(market));
+        console.log("Owner:           ", market.owner());
+        console.log("Min Stake:       ", market.minStake());
+        console.log("Grace Period:    ", market.resolutionGracePeriod());
         console.log("==================================================\n");
 
-        return predictionMarket;
+        return market;
     }
 
-    /// @dev Reads PRIVATE_KEY (fallback DEPLOYER_PRIVATE_KEY), accepting hex
-    ///      with or without the 0x prefix.
+    /// @dev Reads PRIVATE_KEY (fallback DEPLOYER_PRIVATE_KEY), with or without 0x prefix.
     function _readPrivateKey() internal returns (uint256) {
         string memory pk = vm.envOr("PRIVATE_KEY", string(""));
         if (bytes(pk).length == 0) {
