@@ -14,8 +14,15 @@ import {
   walletConnectWallet,
 } from "@rainbow-me/rainbowkit/wallets";
 import { WagmiProvider } from "wagmi";
-import { avalancheFuji, avalanche } from "wagmi/chains";
+import { avalanche } from "wagmi/chains";
+import { avalancheFuji as avalancheFujiBase } from "wagmi/chains";
 import { sonicTestnet } from "@predict-me/core";
+
+// Override Avalanche Fuji with our custom logo
+const avalancheFuji = {
+  ...avalancheFujiBase,
+  iconUrl: "/avalanche-logo.png",
+};
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 

@@ -148,7 +148,7 @@ export default function StatusBanner({
       >
         <div className="flex items-center gap-2">
           <AlertTriangle size={14} className="shrink-0 text-[#F59E0B]" />
-          <span>Backend sync offline. Operating directly via Soroban RPC.</span>
+          <span>{message ?? "Backend sync offline. Reading directly from chain."}</span>
         </div>
       </div>
     );
