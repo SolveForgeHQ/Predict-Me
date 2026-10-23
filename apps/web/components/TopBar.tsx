@@ -35,8 +35,8 @@ export default function TopBar() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isAvalanche = chain === "avalanche";
-  const isSonic = chain === "sonic";
-  const isEvm = isAvalanche || isSonic;
+  const isSonic = false; // Sonic removed from UI
+  const isEvm = isAvalanche;
 
   // Check if connected address is admin/owner
   useEffect(() => {
@@ -47,7 +47,6 @@ export default function TopBar() {
 
     const envAdmin = isEvm
       ? (process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ??
-         process.env.NEXT_PUBLIC_SONIC_ADMIN_ADDRESS ??
          process.env.NEXT_PUBLIC_ADMIN_ADDRESS)
       : (process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ??
          process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
