@@ -46,7 +46,7 @@ export default function LeaderboardPage() {
             className="text-xs font-semibold px-3 py-1.5 rounded-full"
             style={{ backgroundColor: `${chainMetadata.color}18`, color: chainMetadata.color }}
           >
-            Sonic Testnet only right now
+            Live on Sonic · Avalanche coming soon
           </span>
         </div>
       </div>
