@@ -82,19 +82,21 @@ export class AvalancheMarketClient implements PredictionMarketClient {
     }
 
     const account = this.getAccount(params.callerAddress);
-    const endTimestampSeconds = BigInt(
+    // New contract uses closeTime as uint64 (seconds)
+    const closeTimestampSeconds = BigInt(
       params.endTime > 1_000_000_000_000
         ? Math.floor(params.endTime / 1000)
         : params.endTime
     );
     const outcomes = normalizeOutcomes(params.outcomes);
     validateOutcomes(outcomes);
+    const resolutionCriteria = params.resolutionCriteria ?? "Owner decides";
 
     const txHash = await this.walletClient.writeContract({
       address: this.contractAddress,
       abi: PredictionMarketAbi,
       functionName: "createMarket",
-      args: [params.question, endTimestampSeconds, outcomes],
+      args: [params.question, outcomes, closeTimestampSeconds, resolutionCriteria],
       account,
       chain: this.walletClient.chain,
     });
@@ -257,21 +259,14 @@ export class AvalancheMarketClient implements PredictionMarketClient {
       if (!data) return null;
 
       const rawStatus = Number((data as any).status);
-      const status: MarketStatus = rawStatus === 0 ? "open" : "resolved";
+      // 0=Open, 1=Resolved, 2=Cancelled
+      const status: MarketStatus = rawStatus === 0 ? "open" : rawStatus === 1 ? "resolved" : "cancelled";
       const outcomes = [...((data as any).outcomeLabels as string[])];
       const pools = ((data as any).pools as bigint[]).map((p) => Number(formatEther(p)));
       const totalPool = Number(formatEther((data as any).totalPool));
-      const endTime = Number((data as any).endTime) * 1000;
-      const resolvedOutcomeIndex = rawStatus === 0 ? undefined : Number((data as any).winningOutcome);
-
-      // Legacy fallback: old deployments without outcomeLabels/pools
-      if (outcomes.length === 0) {
-        const legacy = data as any;
-        if (legacy.yesPool !== undefined) {
-          outcomes.push("YES", "NO");
-          pools.push(Number(formatEther(legacy.yesPool)), Number(formatEther(legacy.noPool)));
-        }
-      }
+      // New contract uses closeTime (uint64) instead of endTime (uint256)
+      const endTime = Number((data as any).closeTime ?? (data as any).endTime) * 1000;
+      const resolvedOutcomeIndex = rawStatus === 1 ? Number((data as any).winningOutcome) : undefined;
 
       return buildMarket({
         id: marketId,
@@ -283,6 +278,7 @@ export class AvalancheMarketClient implements PredictionMarketClient {
         pools,
         totalPool,
         resolvedOutcomeIndex,
+        resolutionCriteria: (data as any).resolutionCriteria || undefined,
       });
     } catch {
       return null;
