@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Market } from "@/lib/markets";
 import { outcomeColor } from "@/lib/types";
 import { useWallet } from "@/context/WalletContext";
@@ -15,60 +15,46 @@ interface Props {
 }
 
 type PendingStep = "simulating" | "signing" | "confirming";
-type ActionType = "approve" | "buy" | "mint" | "claim" | "refund";
 
 export default function TradePanel({ market }: Props) {
   const { publicKey, connected, connecting, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { chain, client, chainMetadata } = useChain();
+
   const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];
   const percents = market.outcomePercents.length === outcomes.length
     ? market.outcomePercents
     : outcomes.map(() => Math.round(100 / outcomes.length));
+
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [amount, setAmount] = useState("");
-
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
-  const [pendingAction, setPendingAction] = useState<ActionType | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [txHash, setTxHash] = useState("");
 
   const currency = chainMetadata.currency;
-
   const isPending = pendingStep !== null;
   const selectedLabel = outcomes[selectedIndex] ?? `Outcome ${selectedIndex + 1}`;
   const selectedColor = outcomeColor(selectedIndex);
   const selectedPercent = percents[selectedIndex] ?? 0;
   const selectedPrice = selectedPercent / 100;
 
-  const getStepLabel = (step: PendingStep): string => {
-    switch (step) {
-      case "simulating":
-        return `Simulating ${pendingAction ?? "trade"} on ${chainMetadata.name}\u2026`;
-      case "signing":
-        return "Waiting for wallet signature\u2026";
-      case "confirming":
-        return chain === "avalanche"
-          ? "Waiting for block confirmation on Avalanche\u2026"
-          : "Confirming on Stellar ledger\u2026";
-    }
-  };
-
   const estShares =
     amount && parseFloat(amount) > 0 && selectedPrice > 0
       ? (parseFloat(amount) / selectedPrice).toFixed(2)
-      : "\u2014";
+      : "—";
 
-  const handleBuy = useCallback(async () => {
-    if (!connected) {
-      connect();
-      return;
+  const getStepLabel = (step: PendingStep): string => {
+    switch (step) {
+      case "simulating": return `Simulating trade on ${chainMetadata.name}…`;
+      case "signing":    return "Waiting for wallet signature…";
+      case "confirming": return `Waiting for confirmation on ${chainMetadata.name}…`;
     }
+  };
 
-    if (isWrongNetwork) {
-      await switchNetwork();
-      return;
-    }
+  const handleBuy = async () => {
+    if (!connected) { connect(); return; }
+    if (isWrongNetwork) { await switchNetwork(); return; }
 
     const amountNum = parseFloat(amount);
     if (!amountNum || amountNum <= 0) {
@@ -78,50 +64,33 @@ export default function TradePanel({ market }: Props) {
 
     setErrorMsg("");
     setTxHash("");
-    setPendingAction("buy");
     setPendingStep("simulating");
 
     try {
       await new Promise((r) => setTimeout(r, 0));
+      const t1 = setTimeout(() => setPendingStep("signing"), 300);
+      const t2 = setTimeout(() => setPendingStep("confirming"), 2000);
 
-      const callPromise = client.buyShares({
+      const result = await client.buyShares({
         marketId: market.id,
         outcomeIndex: selectedIndex,
         amount: amountNum,
         callerAddress: publicKey ?? undefined,
       });
 
-      const signingTimer = setTimeout(() => setPendingStep("signing"), 300);
-      const confirmingTimer = setTimeout(() => setPendingStep("confirming"), 2000);
-
-      const result = await callPromise;
-
-      clearTimeout(signingTimer);
-      clearTimeout(confirmingTimer);
-
+      clearTimeout(t1); clearTimeout(t2);
       setTxHash(result.txHash);
-      toast.success(
-        "Trade Confirmed!",
-        `Successfully purchased ${selectedLabel} shares on ${chainMetadata.name}.`
-      );
+      toast.success("Trade Confirmed!", `Successfully purchased ${selectedLabel} shares on ${chainMetadata.name}.`);
       setAmount("");
-      // Notify PositionCard to refresh on-chain balance
       window.dispatchEvent(new CustomEvent("predict-me:buy", { detail: { marketId: market.id } }));
     } catch (err) {
-      const message = parseTransactionError(err, {
-        chain,
-        currency,
-        action: "trade",
-      });
+      const message = parseTransactionError(err, { chain, currency, action: "trade" });
       setErrorMsg(message);
       toast.error("Trade Failed", message);
-      console.error("[TradePanel] buyShares error:", err);
     } finally {
       setPendingStep(null);
-      setPendingAction(null);
     }
-  }, [connected, isWrongNetwork, amount, currency, client, market.id, selectedIndex, publicKey,
-      selectedLabel, chainMetadata.name, chain, connect, switchNetwork, toast]);
+  };
 
   return (
     <div
@@ -130,10 +99,9 @@ export default function TradePanel({ market }: Props) {
         background: "linear-gradient(135deg, #161B26, #131820)",
         border: "1px solid #1E2435",
         boxShadow: `0 0 40px ${selectedColor}14`,
-        transition: "box-shadow 0.3s ease",
       }}
     >
-      {/* Outcome selector — N options, wraps without breaking layout */}
+      {/* Outcome tabs */}
       <div
         className={`grid ${outcomes.length <= 2 ? "grid-cols-2" : outcomes.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}
         style={{ borderBottom: "1px solid #1E2435" }}
@@ -144,11 +112,7 @@ export default function TradePanel({ market }: Props) {
           return (
             <button
               key={`${label}-${i}`}
-              onClick={() => {
-                setSelectedIndex(i);
-                setErrorMsg("");
-                setTxHash("");
-              }}
+              onClick={() => { setSelectedIndex(i); setErrorMsg(""); setTxHash(""); }}
               disabled={isPending}
               className="side-tab py-3 px-2 text-sm font-bold disabled:opacity-50 truncate"
               style={{
@@ -158,7 +122,7 @@ export default function TradePanel({ market }: Props) {
               }}
               title={label}
             >
-              {label} &middot; {percents[i] ?? 0}%
+              {label} · {percents[i] ?? 0}%
             </button>
           );
         })}
@@ -167,14 +131,12 @@ export default function TradePanel({ market }: Props) {
       <div className="p-5 flex flex-col gap-4">
         {/* Price chip */}
         <div className="flex items-center justify-between">
-          <p className="text-xs" style={{ color: "#8B93A7" }}>
-            {selectedLabel} price
-          </p>
+          <p className="text-xs" style={{ color: "#8B93A7" }}>{selectedLabel} price</p>
           <span
             className="text-sm font-bold px-3 py-1 rounded-full"
             style={{ backgroundColor: `${selectedColor}22`, color: selectedColor }}
           >
-            {selectedPercent}&cent;
+            {selectedPercent}¢
           </span>
         </div>
 
@@ -197,10 +159,7 @@ export default function TradePanel({ market }: Props) {
               placeholder="0.00"
               disabled={isPending}
               value={amount}
-              onChange={(e) => {
-                setErrorMsg("");
-                setAmount(e.target.value);
-              }}
+              onChange={(e) => { setErrorMsg(""); setAmount(e.target.value); }}
               className="flex-1 bg-transparent py-3 pr-3 pl-2 text-sm outline-none disabled:opacity-50"
               style={{ color: "#F2F4F7" }}
             />
@@ -216,51 +175,35 @@ export default function TradePanel({ market }: Props) {
           <span style={{ color: "#F2F4F7", fontWeight: 700 }}>{estShares}</span>
         </div>
 
-        {/* Wrong network warning */}
+        {/* Wrong network */}
         {connected && isWrongNetwork && !isPending && (
           <StatusBanner
             variant="wrong_network"
-            title="Wrong Network Selected"
-            message={`Your wallet is connected to an unsupported network. Please switch to ${chainMetadata.name} to trade.`}
+            title="Wrong Network"
+            message={`Please switch to ${chainMetadata.name} to trade.`}
             onAction={switchNetwork}
             actionLabel="Switch Network"
           />
         )}
 
-        {/* Pending step indicator */}
-        {isPending && (
-          <StatusBanner variant="pending" stepLabel={getStepLabel(pendingStep!)} />
-        )}
-
-        {/* Inline error display */}
-        {errorMsg && !isPending && (
-          <StatusBanner variant="error" title="Trade Failed" message={errorMsg} />
-        )}
-
-        {/* Success confirmation */}
+        {isPending && <StatusBanner variant="pending" stepLabel={getStepLabel(pendingStep!)} />}
+        {errorMsg && !isPending && <StatusBanner variant="error" title="Trade Failed" message={errorMsg} />}
         {txHash && !isPending && (
           <StatusBanner
             variant="success"
-            title="Transaction confirmed successfully!"
+            title="Transaction confirmed!"
             txHash={txHash}
             explorerBaseUrl={chainMetadata.explorerBaseUrl}
           />
         )}
 
-        {/* Buy / Connect button */}
+        {/* Buy / Switch / Connect button */}
         {connected ? (
           isWrongNetwork ? (
             <button
               onClick={switchNetwork}
-              className="w-full flex items-center justify-center gap-2 transition-all cursor-pointer text-white"
-              style={{
-                backgroundColor: "#E84142",
-                padding: "0.875rem",
-                borderRadius: "0.75rem",
-                fontWeight: 700,
-                fontSize: "0.875rem",
-                boxShadow: "0 0 16px rgba(232, 65, 66, 0.35)",
-              }}
+              className="w-full py-3.5 rounded-xl text-sm font-bold text-white"
+              style={{ backgroundColor: "#E84142" }}
             >
               Switch to {chainMetadata.name}
             </button>
@@ -277,11 +220,8 @@ export default function TradePanel({ market }: Props) {
                 fontSize: "0.875rem",
               }}
             >
-              {isPending && pendingAction === "buy" ? (
-                <>
-                  <Loader2 size={15} className="animate-spin" />
-                  Processing trade on {chainMetadata.shortName}&hellip;
-                </>
+              {isPending ? (
+                <><Loader2 size={15} className="animate-spin" />Processing…</>
               ) : (
                 `Buy ${selectedLabel}`
               )}
@@ -292,11 +232,7 @@ export default function TradePanel({ market }: Props) {
             onClick={connect}
             disabled={connecting}
             className="w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all"
-            style={{
-              backgroundColor: "#161B26",
-              border: "1px solid #1E2435",
-              color: "#8B93A7",
-            }}
+            style={{ backgroundColor: "#161B26", border: "1px solid #1E2435", color: "#8B93A7" }}
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLButtonElement).style.borderColor = chainMetadata.borderColor;
               (e.currentTarget as HTMLButtonElement).style.color = chainMetadata.color;
@@ -307,8 +243,21 @@ export default function TradePanel({ market }: Props) {
             }}
           >
             <Wallet size={15} strokeWidth={1.8} />
-            {connecting ? "Connecting wallet\u2026" : `Connect ${chainMetadata.shortName} wallet to trade`}
+            {connecting ? "Connecting…" : `Connect ${chainMetadata.shortName} wallet to trade`}
           </button>
+        )}
+
+        {/* Gas faucet link */}
+        {chainMetadata.faucetUrl && (
+          <a
+            href={chainMetadata.faucetUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] flex items-center justify-center gap-1 transition-opacity hover:opacity-70"
+            style={{ color: "#8B93A7" }}
+          >
+            Get {currency} gas tokens from faucet
+          </a>
         )}
       </div>
     </div>
