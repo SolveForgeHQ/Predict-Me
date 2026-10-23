@@ -9,7 +9,7 @@ A multi-chain prediction market dApp built on **Stellar (Soroban)** and **Avalan
 | Network | Component | Address / Identifier |
 |---|---|---|
 | **Stellar Testnet** | Soroban Prediction Market | `CCGM6LQRQNQGMUXMXHICCH73CDBYOTMV5LEJ7JWWXUBXLRFZJCPAHHXI` |
-| **Avalanche Fuji** | Solidity Prediction Market | `0x49835b6ad67dB224413Ef53A52cFAa19391F20AC` |
+| **Avalanche Fuji** | Solidity Prediction Market | `0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa` |
 | **Sonic Testnet** | ERC-20 Prediction Market | `0x25D035CB295d94A073107aAB9Ac86a3655a5614E` |
 | **Sonic Testnet** | Mock USDC (test token) | `0x96Ef7Fb36E31445920EFC305Cc0D9C0288af7D02` |
 
@@ -53,7 +53,7 @@ A multi-chain prediction market dApp built on **Stellar (Soroban)** and **Avalan
    NEXT_PUBLIC_MARKET_CONTRACT_ID=CCGM6LQRQNQGMUXMXHICCH73CDBYOTMV5LEJ7JWWXUBXLRFZJCPAHHXI
    NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS=GD7WCBHEFPWKRZF7VWOSXXYZJ6KQAWLDU7BIP4FLJQGB6AFENWF6DIAQ
 
-   NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS=0x49835b6ad67dB224413Ef53A52cFAa19391F20AC
+   NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS=0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa
    NEXT_PUBLIC_AVALANCHE_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc
 
    NEXT_PUBLIC_SONIC_CONTRACT_ADDRESS=0x25D035CB295d94A073107aAB9Ac86a3655a5614E
