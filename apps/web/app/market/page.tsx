@@ -56,9 +56,6 @@ export default function MarketsPage() {
               Explore Markets
             </h1>
           </div>
-          <p className="text-xs" style={{ color: "#8B93A7" }}>
-            Trade outcomes and predict the future on {chainMetadata.name}.
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
