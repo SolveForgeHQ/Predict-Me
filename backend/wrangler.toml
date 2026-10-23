@@ -10,9 +10,11 @@ SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org"
 MARKET_CONTRACT_ID = "CCGM6LQRQNQGMUXMXHICCH73CDBYOTMV5LEJ7JWWXUBXLRFZJCPAHHXI"
 AVALANCHE_RPC_URL = "https://api.avax-test.network/ext/bc/C/rpc"
 AVALANCHE_CONTRACT_ADDRESS = "0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa"
+# First block of the new Avalanche contract deployment
+AVALANCHE_START_BLOCK = "59915671"
 # Comma-separated list of allowed frontend origins. Override in production
 # via `wrangler secret put FRONTEND_ORIGIN`.
-FRONTEND_ORIGIN = "http://localhost:3000"
+FRONTEND_ORIGIN = "https://predict-me.netlify.app,http://localhost:3000"
 SONIC_RPC_URL = "https://rpc.testnet.soniclabs.com"
 SONIC_CONTRACT_ADDRESS = "0x25D035CB295d94A073107aAB9Ac86a3655a5614E"
 SONIC_TOKEN_ADDRESS = "0x96Ef7Fb36E31445920EFC305Cc0D9C0288af7D02"
