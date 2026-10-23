@@ -13,38 +13,27 @@ import {
   type PredictionMarketClient,
   StellarMarketClient,
   AvalancheMarketClient,
-  SonicMarketClient,
-  sonicTestnet,
+  // SonicMarketClient — commented out, Sonic removed from UI for now
+  // sonicTestnet,
 } from "@predict-me/core";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 import { avalancheFuji } from "viem/chains";
 import { useWalletClient } from "wagmi";
 import { signTransaction, STELLAR_NETWORK_PASSPHRASE } from "@/lib/wallet";
 
-// Only EVM chains are selectable in the UI. Stellar code is preserved but
-// not surfaced — its ChainId is kept for type safety.
-export type ChainId = "sonic" | "avalanche" | "stellar";
-export type SelectableChainId = "sonic" | "avalanche";
-
-// ── Per-chain capability config ─────────────────────────────────────────────
-// Single source of truth. Components read this instead of writing if-statements.
+// Selectable chains shown in the UI. Stellar and Sonic code is preserved
+// but not surfaced — their ChainIds are kept for type safety.
+export type ChainId = "avalanche" | "stellar"; // "sonic" removed from UI
+export type SelectableChainId = "avalanche";
 
 export interface ChainCapabilities {
-  /** Whether buying shares requires an ERC-20 Approve step first (Sonic). */
   requiresApprove: boolean;
-  /** Whether to show a "Get test tokens" mint button. */
   showMintButton: boolean;
-  /** Faucet URL for the native gas token. */
   gasFaucetUrl: string;
-  /** Faucet URL for the staking token (may equal gasFaucetUrl). */
   tokenFaucetUrl: string;
-  /** Block explorer base URL (no trailing slash). */
   explorerBaseUrl: string;
-  /** Default currency symbol (may be overridden by on-chain ERC-20 read). */
   currencySymbol: string;
-  /** Decimals for display formatting. */
   currencyDecimals: number;
-  /** wagmi chain ID for network switching. */
   evmChainId: number;
 }
 
@@ -62,17 +51,6 @@ export interface ChainMetadata {
   capabilities?: ChainCapabilities;
 }
 
-const SONIC_CAPABILITIES: ChainCapabilities = {
-  requiresApprove: true,
-  showMintButton: true,
-  gasFaucetUrl: "https://testnet.soniclabs.com/account",
-  tokenFaucetUrl: "https://testnet.soniclabs.com/account",
-  explorerBaseUrl: "https://testnet.sonicscan.org",
-  currencySymbol: "S",
-  currencyDecimals: 18,
-  evmChainId: 14601,
-};
-
 const AVALANCHE_CAPABILITIES: ChainCapabilities = {
   requiresApprove: false,
   showMintButton: false,
@@ -85,19 +63,6 @@ const AVALANCHE_CAPABILITIES: ChainCapabilities = {
 };
 
 export const CHAIN_METADATA: Record<ChainId, ChainMetadata> = {
-  sonic: {
-    id: "sonic",
-    name: "Sonic Testnet",
-    shortName: "Sonic",
-    currency: "S",
-    color: "#8B5CF6",
-    badgeBg: "rgba(139, 92, 246, 0.15)",
-    borderColor: "rgba(139, 92, 246, 0.35)",
-    explorerBaseUrl: "https://testnet.sonicscan.org",
-    faucetUrl: "https://testnet.soniclabs.com/account",
-    evmChainId: 14601,
-    capabilities: SONIC_CAPABILITIES,
-  },
   avalanche: {
     id: "avalanche",
     name: "Avalanche Fuji",
@@ -125,16 +90,14 @@ export const CHAIN_METADATA: Record<ChainId, ChainMetadata> = {
   },
 };
 
-/** The two chains shown in the chain selector. */
-export const SELECTABLE_CHAINS: SelectableChainId[] = ["sonic", "avalanche"];
+export const SELECTABLE_CHAINS: SelectableChainId[] = ["avalanche"];
 
 const STORAGE_KEY = "predict_me_active_chain";
-const DEFAULT_CHAIN: SelectableChainId = "sonic";
+const DEFAULT_CHAIN: SelectableChainId = "avalanche";
 
 interface ChainContextValue {
   chain: ChainId;
   chainMetadata: ChainMetadata;
-  /** Undefined for Stellar (not selectable). */
   chainCapabilities: ChainCapabilities | undefined;
   client: PredictionMarketClient;
   setChain: (chain: ChainId) => void;
@@ -147,8 +110,6 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const [chain, setChainState] = useState<ChainId>(DEFAULT_CHAIN);
   const { data: wagmiWalletClient } = useWalletClient();
 
-  // Restore persisted chain selection on mount.
-  // Only selectable chains are accepted from storage.
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY) as ChainId | null;
@@ -168,8 +129,6 @@ export function ChainProvider({ children }: { children: ReactNode }) {
     setChain(SELECTABLE_CHAINS[(idx + 1) % SELECTABLE_CHAINS.length]);
   }, [chain, setChain]);
 
-  // Stellar public key — read from localStorage without importing WalletContext
-  // to avoid a circular dependency.
   const STELLAR_PK_KEY = "predict-me:wallet";
   const [stellarPublicKey, setStellarPublicKey] = useState<string | null>(() =>
     typeof window === "undefined" ? null : localStorage.getItem(STELLAR_PK_KEY)
@@ -193,17 +152,6 @@ export function ChainProvider({ children }: { children: ReactNode }) {
         walletClient = createWalletClient({ chain: avalancheFuji, transport: custom((window as any).ethereum) });
       }
       return new AvalancheMarketClient({ contractAddress, publicClient: publicClient as any, walletClient });
-    }
-
-    if (chain === "sonic") {
-      const rpcUrl = process.env.NEXT_PUBLIC_SONIC_RPC_URL ?? "https://rpc.testnet.soniclabs.com";
-      const contractAddress = (process.env.NEXT_PUBLIC_SONIC_CONTRACT_ADDRESS ?? "0x0000000000000000000000000000000000000000") as Address;
-      const publicClient = createPublicClient({ chain: sonicTestnet, transport: http(rpcUrl) });
-      let walletClient: any = wagmiWalletClient;
-      if (!walletClient && typeof window !== "undefined" && (window as any).ethereum) {
-        walletClient = createWalletClient({ chain: sonicTestnet, transport: custom((window as any).ethereum) });
-      }
-      return new SonicMarketClient({ contractAddress, publicClient: publicClient as any, walletClient });
     }
 
     // Stellar — preserved but not surfaced in the UI

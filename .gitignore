@@ -45,3 +45,10 @@ next-env.d.ts
 target/
 cache/
 out/
+
+# Wrangler local dev state
+backend/.wrangler/
+
+# Foundry broadcast artifacts (contain deployment keys/tx data)
+blockchain/sonic/contracts/broadcast/
+blockchain/avalanche/contracts/broadcast/

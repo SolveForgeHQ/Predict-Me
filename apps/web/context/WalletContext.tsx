@@ -2,8 +2,8 @@
 
 // WalletContext.tsx
 // Unified wallet state for predict-me.
-// EVM chains (Sonic, Avalanche) use wagmi for account tracking + EIP-6963
-// for direct wallet selection. The connect modal is a custom two-step flow.
+// EVM chains (Avalanche) use wagmi for account tracking.
+// Sonic support is commented out and can be re-enabled later.
 
 import {
   createContext,
@@ -51,8 +51,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [showModal, setShowModal] = useState(false);
 
   // ── Chain-aware values ──
-  const isEvm = chain === "avalanche" || chain === "sonic";
-  const targetChainName = chain === "avalanche" ? "Avalanche Fuji" : chain === "sonic" ? "Sonic Testnet" : "Stellar Testnet";
+  const isEvm = chain === "avalanche";
+  const targetChainName = chain === "avalanche" ? "Avalanche Fuji" : "Stellar Testnet";
   const expectedEvmChainId = CHAIN_METADATA[chain].evmChainId;
 
   const isWrongNetwork = Boolean(
