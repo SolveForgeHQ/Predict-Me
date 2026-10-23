@@ -67,6 +67,18 @@ app.use('/auth/login', async (c, next) => {
 // ── Health ───────────────────────────────────────────────────
 app.get('/health', (c) => c.text('OK'));
 
+// ── Debug: event counts (dev only) ───────────────────────────
+app.get('/debug/events', async (c) => {
+  if (!c.env?.DB) return c.json({ error: 'no DB' }, 500);
+  const rows = await (c.env.DB as D1Database)
+    .prepare('SELECT event_name, COUNT(*) as count FROM chain_events GROUP BY event_name ORDER BY count DESC')
+    .all();
+  const state = await (c.env.DB as D1Database)
+    .prepare('SELECT * FROM indexer_state')
+    .all();
+  return c.json({ events: rows.results, indexer_state: state.results });
+});
+
 // ── Routes ───────────────────────────────────────────────────
 app.route('/markets', markets);
 app.route('/auth', auth);
