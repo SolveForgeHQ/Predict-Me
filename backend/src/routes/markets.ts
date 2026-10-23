@@ -164,12 +164,15 @@ const PREDICTION_MARKET_ABI = [
         internalType: 'struct PredictionMarket.Market',
         components: [
           { name: 'question', type: 'string', internalType: 'string' },
-          { name: 'endTime', type: 'uint256', internalType: 'uint256' },
+          { name: 'resolutionCriteria', type: 'string', internalType: 'string' },
+          { name: 'closeTime', type: 'uint64', internalType: 'uint64' },
           { name: 'status', type: 'uint8', internalType: 'enum PredictionMarket.MarketStatus' },
           { name: 'winningOutcome', type: 'uint256', internalType: 'uint256' },
           { name: 'outcomeLabels', type: 'string[]', internalType: 'string[]' },
           { name: 'pools', type: 'uint256[]', internalType: 'uint256[]' },
           { name: 'totalPool', type: 'uint256', internalType: 'uint256' },
+          { name: 'remainingPool', type: 'uint256', internalType: 'uint256' },
+          { name: 'remainingWinningShares', type: 'uint256', internalType: 'uint256' },
         ],
       },
     ],
@@ -321,39 +324,31 @@ async function fetchMarketsFromAvalanche(
         args: [BigInt(id)],
       })) as {
         question: string;
-        endTime: bigint;
+        resolutionCriteria: string;
+        closeTime: bigint;
         status: number;
-        winningOutcome?: bigint;
-        outcomeLabels?: string[];
-        pools?: bigint[];
-        totalPool?: bigint;
-        // legacy binary fields
-        outcome?: boolean;
-        yesPool?: bigint;
-        noPool?: bigint;
+        winningOutcome: bigint;
+        outcomeLabels: string[];
+        pools: bigint[];
+        totalPool: bigint;
+        remainingPool: bigint;
+        remainingWinningShares: bigint;
       };
 
       if (data) {
         const rawStatus = Number(data.status);
-        const statusStr: 'open' | 'closed' | 'resolved' =
-          rawStatus === 0 ? 'open' : 'resolved';
+        // 0=Open, 1=Resolved, 2=Cancelled
+        const statusStr: 'open' | 'closed' | 'resolved' | 'cancelled' =
+          rawStatus === 0 ? 'open' : rawStatus === 1 ? 'resolved' : 'cancelled';
         const outcomes = Array.isArray(data.outcomeLabels) && data.outcomeLabels.length > 0
           ? data.outcomeLabels.map(String)
           : ['YES', 'NO'];
-        let pools: number[] = Array.isArray(data.pools)
+        const pools: number[] = Array.isArray(data.pools)
           ? data.pools.map((p) => Number(formatEther(p)))
           : [];
-        if (pools.length === 0 && (data.yesPool !== undefined || data.noPool !== undefined)) {
-          pools = [Number(formatEther(data.yesPool ?? BigInt(0))), Number(formatEther(data.noPool ?? BigInt(0)))];
-        }
         while (pools.length < outcomes.length) pools.push(0);
-        pools = pools.slice(0, outcomes.length);
-        const resolvedOutcomeIndex = rawStatus === 0
-          ? undefined
-          : data.winningOutcome !== undefined
-            ? Number(data.winningOutcome)
-            : (data.outcome ? 0 : 1);
-        const endTime = Number(data.endTime) * 1000;
+        const resolvedOutcomeIndex = rawStatus === 1 ? Number(data.winningOutcome) : undefined;
+        const endTime = Number(data.closeTime) * 1000;
 
         results.push(withBinaryCompat({
           id: String(id),
@@ -365,6 +360,7 @@ async function fetchMarketsFromAvalanche(
           outcomes,
           pools,
           resolvedOutcomeIndex,
+          resolutionCriteria: data.resolutionCriteria || undefined,
           updatedAt: Date.now(),
         }));
       }
