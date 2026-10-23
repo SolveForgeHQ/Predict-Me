@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { MARKETS, getMarket, formatPool, timeRemaining, loadMarketsWithSource, mapBackendMarket, type Market } from "@/lib/markets";
+import { getMarket, formatPool, timeRemaining, loadMarketsWithSource, mapBackendMarket, type Market } from "@/lib/markets";
 import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
@@ -10,14 +10,10 @@ interface Props {
   params: Promise<{ id: string }>;
 }
 
-export function generateStaticParams() {
-  return MARKETS.map((m) => ({ id: m.id }));
-}
-
-// Allow on-demand rendering for IDs not in generateStaticParams (live chain markets)
-export const dynamicParams = true;
-// Revalidate every 15 seconds so live market data stays fresh
-export const revalidate = 15;
+// Market pages are rendered on-demand (not statically generated).
+// The backend may not be reachable during build (CI), so we avoid
+// generateStaticParams + static generation that would time out fetching.
+export const dynamic = "force-dynamic";
 
 const CATEGORY_COLORS: Record<string, string> = {
   Sports: "#3B82F6", Crypto: "#F59E0B", Finance: "#8B5CF6",
