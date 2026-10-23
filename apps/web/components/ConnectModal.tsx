@@ -169,13 +169,13 @@ export default function ConnectModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-      style={{ backgroundColor: "rgba(0,0,0,0.7)" }}
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-y-auto"
+      style={{ backgroundColor: "rgba(0,0,0,0.7)", overflowX: "hidden" }}
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl overflow-hidden"
+        className="relative w-full max-w-md rounded-2xl overflow-hidden my-auto"
         style={{
           backgroundColor: "#0D111A",
           border: "1px solid #1E2435",

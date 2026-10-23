@@ -4,8 +4,7 @@ import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
-import { LogOut, Copy, Check, Loader2, ExternalLink, Shield, ArrowLeftRight } from "lucide-react";
-import ChainSwitcher from "@/components/ChainSwitcher";
+import { LogOut, Copy, Check, Loader2, ExternalLink, Shield } from "lucide-react";
 import { useChain, CHAIN_METADATA, SELECTABLE_CHAINS } from "@/context/ChainContext";
 
 function formatAddress(address: string): string {
@@ -143,8 +142,7 @@ export default function TopBar() {
               </Link>
             )}
 
-            {/* Chain selector — Sonic and Avalanche */}
-            <ChainSwitcher />
+            {/* Wallet button area — chain selection is in the Connect modal */}
 
             {/* Wallet button area */}
             <div className="relative" ref={dropdownRef}>

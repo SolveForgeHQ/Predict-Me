@@ -151,21 +151,76 @@ export async function loadMarketsWithSource(chain?: string): Promise<MarketLoadR
       return { markets: data.markets.map(mapBackendMarket), source: "backend" };
     }
   } catch (err) {
-    console.warn("Backend GET /markets failed, falling back to direct contract call:", err);
+    console.warn("Backend GET /markets failed, falling back to direct chain call:", err);
   }
 
-  // 2. Secondary fallback: Query Soroban contract directly
-  try {
-    const { fetchMarkets } = await import("@/lib/contract");
-    const onChainMarkets = await fetchMarkets();
-    if (onChainMarkets && onChainMarkets.length > 0) {
-      return { markets: onChainMarkets, source: "chain" };
+  // 2. Secondary: Read directly from the active chain's smart contract
+  //    This is chain-aware — for Sonic it reads the ERC-20 market contract,
+  //    for Stellar it reads the Soroban contract.
+  if (chain === "sonic") {
+    try {
+      const { SonicMarketClient, sonicTestnet } = await import("@predict-me/core");
+      const { createPublicClient, http } = await import("viem");
+      const contractAddress = process.env.NEXT_PUBLIC_SONIC_CONTRACT_ADDRESS;
+      if (contractAddress && contractAddress !== "0x0000000000000000000000000000000000000000") {
+        const publicClient = createPublicClient({ chain: sonicTestnet, transport: http() });
+        const sonicClient = new SonicMarketClient({ contractAddress: contractAddress as any, publicClient: publicClient as any });
+        const count = await sonicClient.getMarketCount();
+        if (count > 0) {
+          const markets: Market[] = [];
+          for (let i = 1; i <= count; i++) {
+            const m = await sonicClient.getMarket(String(i));
+            if (m) {
+              // Map @predict-me/types Market to frontend Market
+              const totalPool = (m as any).totalPool ?? (m as any).pools?.reduce((a: number, b: number) => a + b, 0) ?? 0;
+              const pools: number[] = (m as any).pools ?? [];
+              const n = (m as any).outcomes?.length ?? 2;
+              const outcomePercents = totalPool > 0
+                ? pools.map((p: number) => Math.round((p / totalPool) * 100))
+                : Array.from({ length: n }, () => Math.round(100 / n));
+              if (outcomePercents.reduce((a, b) => a + b, 0) !== 100) {
+                outcomePercents[outcomePercents.length - 1] += 100 - outcomePercents.reduce((a, b) => a + b, 0);
+              }
+              markets.push({
+                id: m.id,
+                chain: "sonic",
+                question: m.question,
+                outcomes: (m as any).outcomes ?? ["YES", "NO"],
+                outcomePercents,
+                outcomePools: pools,
+                yesPercent: n === 2 ? outcomePercents[0] : 50,
+                noPercent: n === 2 ? outcomePercents[1] : 50,
+                totalPool,
+                endsAt: new Date(m.endTime).toISOString(),
+                status: m.status === "open" ? "open" : m.status === "resolved" ? "resolved" : "resolved",
+                category: (m as any).category ?? "General",
+                resolvedOutcomeIndex: (m as any).resolvedOutcomeIndex,
+                ...(m as any).resolutionCriteria ? { resolutionCriteria: (m as any).resolutionCriteria } : {},
+              } as Market);
+            }
+          }
+          if (markets.length > 0) return { markets, source: "chain" };
+        }
+      }
+    } catch (err) {
+      console.warn("Direct Sonic contract fetch failed:", err);
     }
-  } catch (chainErr) {
-    console.warn("Direct contract fetch failed, using fallback markets:", chainErr);
   }
 
-  // 3. Return empty — never fall back to mock data in production
+  // 3. Stellar fallback (legacy)
+  if (!chain || chain === "stellar") {
+    try {
+      const { fetchMarkets } = await import("@/lib/contract");
+      const onChainMarkets = await fetchMarkets();
+      if (onChainMarkets && onChainMarkets.length > 0) {
+        return { markets: onChainMarkets, source: "chain" };
+      }
+    } catch (chainErr) {
+      console.warn("Direct contract fetch failed:", chainErr);
+    }
+  }
+
+  // 4. Return empty
   return { markets: [], source: "fallback" };
 }
 
