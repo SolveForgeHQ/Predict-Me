@@ -3,9 +3,73 @@ import { rpc, Contract, nativeToScVal, scValToNative, xdr } from '@stellar/stell
 import { createPublicClient, http, formatEther, type Address } from 'viem';
 import { drizzle } from 'drizzle-orm/d1';
 import { eq, or, and } from 'drizzle-orm';
-import { marketCache } from '../db/schema';
+import { marketCache, priceHistory } from '../db/schema';
 
-export type SupportedChain = 'stellar' | 'avalanche';
+// ── Backend circuit breakers for external RPC providers ───────────────────
+// Each breaker is module-level (per Worker isolate). They trip after 3
+// consecutive failures and probe again after 30 s — matching the cache TTL
+// so a tripped breaker never blocks the D1 fallback path.
+// State is lost on Worker restart/cold-start, which is acceptable: the
+// breaker will simply re-learn the provider's health on the next request.
+
+type CBState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+class BackendCircuitBreaker {
+  private state: CBState = 'CLOSED';
+  private failures = 0;
+  private lastFailureAt = 0;
+  private halfOpenInFlight = false;
+
+  constructor(
+    readonly name: string,
+    private readonly threshold = 3,
+    private readonly resetMs = 30_000,
+  ) {}
+
+  isAvailable(): boolean {
+    if (this.state === 'CLOSED') return true;
+    if (this.state === 'OPEN') {
+      if (Date.now() - this.lastFailureAt >= this.resetMs) {
+        if (!this.halfOpenInFlight) {
+          this.state = 'HALF_OPEN';
+          return true;
+        }
+      }
+      return false;
+    }
+    return !this.halfOpenInFlight; // HALF_OPEN: one probe at a time
+  }
+
+  async call<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.isAvailable()) {
+      throw new Error(`CircuitOpen:${this.name}`);
+    }
+    if (this.state === 'HALF_OPEN') this.halfOpenInFlight = true;
+    try {
+      const result = await fn();
+      this.failures = 0;
+      this.halfOpenInFlight = false;
+      this.state = 'CLOSED';
+      return result;
+    } catch (err) {
+      this.failures++;
+      this.lastFailureAt = Date.now();
+      this.halfOpenInFlight = false;
+      if (this.state === 'HALF_OPEN' || this.failures >= this.threshold) {
+        this.state = 'OPEN';
+      }
+      throw err;
+    }
+  }
+}
+
+const rpcBreakers: Record<SupportedChain, BackendCircuitBreaker> = {
+  stellar:   new BackendCircuitBreaker('soroban-rpc',   3, 30_000),
+  avalanche: new BackendCircuitBreaker('avalanche-rpc', 3, 30_000),
+  sonic:     new BackendCircuitBreaker('sonic-rpc',     3, 30_000),
+};
+
+export type SupportedChain = 'stellar' | 'avalanche' | 'sonic';
 
 export interface CachedMarket {
   id: string;
@@ -13,10 +77,12 @@ export interface CachedMarket {
   question: string;
   category: string;
   endTime: number;
-  status: 'open' | 'closed' | 'resolved';
+  status: 'open' | 'closed' | 'resolved' | 'cancelled';
   outcomes: string[];
   pools: number[];
   resolvedOutcomeIndex?: number;
+  resolutionCriteria?: string;
+  tokenDecimals?: number;
   // ── Backward-compat (populated when outcomes.length === 2) ──
   yesPool: number;
   noPool: number;
@@ -55,6 +121,9 @@ interface EnvBindings {
   MARKET_CONTRACT_ID?: string;
   AVALANCHE_RPC_URL?: string;
   AVALANCHE_CONTRACT_ADDRESS?: string;
+  SONIC_RPC_URL?: string;
+  SONIC_CONTRACT_ADDRESS?: string;
+  SONIC_TOKEN_ADDRESS?: string;
   DB?: D1Database;
 }
 
@@ -72,6 +141,7 @@ interface ChainCacheState {
 const inMemoryCache: Record<SupportedChain, ChainCacheState> = {
   stellar: { markets: [], lastFetchedAt: 0 },
   avalanche: { markets: [], lastFetchedAt: 0 },
+  sonic: { markets: [], lastFetchedAt: 0 },
 };
 
 // Minimal ABI for Avalanche PredictionMarket contract view functions
@@ -306,6 +376,189 @@ async function fetchMarketsFromAvalanche(
   return results;
 }
 
+// Minimal ABI for Sonic PredictionMarketERC20 contract view functions
+const SONIC_MARKET_ABI = [
+  {
+    type: 'function',
+    name: 'marketCount',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getMarket',
+    inputs: [{ name: 'marketId', type: 'uint256', internalType: 'uint256' }],
+    outputs: [
+      {
+        name: '',
+        type: 'tuple',
+        internalType: 'struct PredictionMarketERC20.Market',
+        components: [
+          { name: 'question', type: 'string', internalType: 'string' },
+          { name: 'resolutionCriteria', type: 'string', internalType: 'string' },
+          { name: 'closeTime', type: 'uint64', internalType: 'uint64' },
+          { name: 'status', type: 'uint8', internalType: 'enum PredictionMarketERC20.MarketStatus' },
+          { name: 'winningOutcome', type: 'uint256', internalType: 'uint256' },
+          { name: 'outcomeLabels', type: 'string[]', internalType: 'string[]' },
+          { name: 'pools', type: 'uint256[]', internalType: 'uint256[]' },
+          { name: 'totalPool', type: 'uint256', internalType: 'uint256' },
+          { name: 'remainingPool', type: 'uint256', internalType: 'uint256' },
+          { name: 'remainingWinningShares', type: 'uint256', internalType: 'uint256' },
+        ],
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'token',
+    inputs: [],
+    outputs: [{ name: '', type: 'address', internalType: 'contract IERC20' }],
+    stateMutability: 'view',
+  },
+] as const;
+
+const ERC20_READ_ABI = [
+  {
+    type: 'function',
+    name: 'decimals',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint8', internalType: 'uint8' }],
+    stateMutability: 'view',
+  },
+] as const;
+
+const SONIC_BATCH_SIZE = 5;
+const SONIC_BATCH_DELAY_MS = 200;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetches all markets from the Sonic ERC-20 prediction market contract.
+ * Uses small batches with delays to respect public RPC rate limits.
+ * Returns amounts as strings in token base units with tokenDecimals for frontend formatting.
+ */
+async function fetchMarketsFromSonic(
+  rpcUrl: string,
+  contractAddress: string
+): Promise<CachedMarket[]> {
+  if (!rpcUrl || !contractAddress || contractAddress === '0x0000000000000000000000000000000000000000') {
+    return [];
+  }
+
+  const client = createPublicClient({
+    transport: http(rpcUrl),
+  });
+
+  // Read token decimals for proper unit conversion
+  let tokenDecimals = 6; // default to USDC-like
+  try {
+    const tokenAddr = (await client.readContract({
+      address: contractAddress as Address,
+      abi: SONIC_MARKET_ABI,
+      functionName: 'token',
+    })) as Address;
+    const decimals = (await client.readContract({
+      address: tokenAddr,
+      abi: ERC20_READ_ABI,
+      functionName: 'decimals',
+    })) as number;
+    tokenDecimals = Number(decimals);
+  } catch {
+    // Keep default
+  }
+
+  let countBigInt = BigInt(0);
+  try {
+    countBigInt = (await client.readContract({
+      address: contractAddress as Address,
+      abi: SONIC_MARKET_ABI,
+      functionName: 'marketCount',
+    })) as bigint;
+  } catch (err) {
+    console.warn('Failed to read marketCount from Sonic:', err);
+    return [];
+  }
+
+  const count = Number(countBigInt);
+  if (count <= 0) {
+    return [];
+  }
+
+  const results: CachedMarket[] = [];
+  const divisor = Math.pow(10, tokenDecimals);
+
+  // Process in small batches to respect rate limits
+  for (let batchStart = 1; batchStart <= count; batchStart += SONIC_BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + SONIC_BATCH_SIZE - 1, count);
+
+    for (let id = batchStart; id <= batchEnd; id++) {
+      try {
+        const data = (await client.readContract({
+          address: contractAddress as Address,
+          abi: SONIC_MARKET_ABI,
+          functionName: 'getMarket',
+          args: [BigInt(id)],
+        })) as {
+          question: string;
+          resolutionCriteria: string;
+          closeTime: bigint;
+          status: number;
+          winningOutcome: bigint;
+          outcomeLabels: string[];
+          pools: bigint[];
+          totalPool: bigint;
+          remainingPool: bigint;
+          remainingWinningShares: bigint;
+        };
+
+        if (data) {
+          const rawStatus = Number(data.status);
+          // 0 = Open, 1 = Resolved, 2 = Cancelled
+          const statusStr: 'open' | 'closed' | 'resolved' | 'cancelled' =
+            rawStatus === 0 ? 'open' : rawStatus === 1 ? 'resolved' : 'cancelled';
+          const outcomes = Array.isArray(data.outcomeLabels) && data.outcomeLabels.length > 0
+            ? data.outcomeLabels.map(String)
+            : ['YES', 'NO'];
+          const pools = Array.isArray(data.pools)
+            ? data.pools.map((p) => Number(p) / divisor)
+            : [];
+          while (pools.length < outcomes.length) pools.push(0);
+          const resolvedOutcomeIndex = rawStatus === 1 ? Number(data.winningOutcome) : undefined;
+          const endTime = Number(data.closeTime) * 1000;
+
+          results.push(withBinaryCompat({
+            id: String(id),
+            chain: 'sonic',
+            question: String(data.question || `Market #${id}`),
+            category: 'General',
+            endTime,
+            status: statusStr,
+            outcomes,
+            pools,
+            resolvedOutcomeIndex,
+            resolutionCriteria: data.resolutionCriteria || undefined,
+            tokenDecimals,
+            updatedAt: Date.now(),
+          }));
+        }
+      } catch {
+        // Ignore individual market lookup failures
+      }
+    }
+
+    // Delay between batches to respect rate limits
+    if (batchEnd < count) {
+      await sleep(SONIC_BATCH_DELAY_MS);
+    }
+  }
+
+  return results;
+}
+
 /**
  * Ensures cache is populated for a given chain (checking in-memory, RPC, then D1).
  */
@@ -328,20 +581,51 @@ async function syncChainMarkets(
     const contractId = c.env?.MARKET_CONTRACT_ID ?? '';
     try {
       if (contractId) {
-        freshMarkets = await fetchMarketsFromStellar(rpcUrl, contractId);
+        freshMarkets = await rpcBreakers.stellar.call(() =>
+          fetchMarketsFromStellar(rpcUrl, contractId)
+        );
       }
     } catch (err) {
-      console.warn('Failed to fetch markets from Soroban RPC:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CircuitOpen:')) {
+        console.warn(`[markets] Soroban RPC circuit is OPEN — skipping fetch, using cache/D1`);
+      } else {
+        console.warn('Failed to fetch markets from Soroban RPC:', err);
+      }
     }
   } else if (chain === 'avalanche') {
     const rpcUrl = c.env?.AVALANCHE_RPC_URL ?? 'https://api.avax-test.network/ext/bc/C/rpc';
     const contractAddress = c.env?.AVALANCHE_CONTRACT_ADDRESS ?? '';
     try {
       if (contractAddress) {
-        freshMarkets = await fetchMarketsFromAvalanche(rpcUrl, contractAddress);
+        freshMarkets = await rpcBreakers.avalanche.call(() =>
+          fetchMarketsFromAvalanche(rpcUrl, contractAddress)
+        );
       }
     } catch (err) {
-      console.warn('Failed to fetch markets from Avalanche RPC:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CircuitOpen:')) {
+        console.warn(`[markets] Avalanche RPC circuit is OPEN — skipping fetch, using cache/D1`);
+      } else {
+        console.warn('Failed to fetch markets from Avalanche RPC:', err);
+      }
+    }
+  } else if (chain === 'sonic') {
+    const rpcUrl = c.env?.SONIC_RPC_URL ?? 'https://rpc.testnet.soniclabs.com';
+    const contractAddress = c.env?.SONIC_CONTRACT_ADDRESS ?? '';
+    try {
+      if (contractAddress) {
+        freshMarkets = await rpcBreakers.sonic.call(() =>
+          fetchMarketsFromSonic(rpcUrl, contractAddress)
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CircuitOpen:')) {
+        console.warn(`[markets] Sonic RPC circuit is OPEN — skipping fetch, using cache/D1`);
+      } else {
+        console.warn('Failed to fetch markets from Sonic RPC:', err);
+      }
     }
   }
 
@@ -373,6 +657,7 @@ async function syncChainMarkets(
               yesPool: m.yesPool,
               noPool: m.noPool,
               resolvedOutcome: typeof m.resolvedOutcome === 'string' ? m.resolvedOutcome : undefined,
+              resolutionCriteria: m.resolutionCriteria ?? undefined,
               updatedAt: m.updatedAt,
             })
             .onConflictDoUpdate({
@@ -390,12 +675,37 @@ async function syncChainMarkets(
                 yesPool: m.yesPool,
                 noPool: m.noPool,
                 resolvedOutcome: typeof m.resolvedOutcome === 'string' ? m.resolvedOutcome : undefined,
+                resolutionCriteria: m.resolutionCriteria ?? undefined,
                 updatedAt: m.updatedAt,
               },
             });
         }
       } catch (dbErr) {
         console.warn(`D1 marketCache write error for chain ${chain}:`, dbErr);
+      }
+
+      // Write price history snapshots — atomic via unique constraint.
+      // The unique index on (market_key, pools) means two Worker instances
+      // racing to insert the same snapshot both succeed without error:
+      // the first wins, the second is a no-op. No read-compare-insert needed.
+      try {
+        for (const m of freshMarkets) {
+          const totalPool = m.pools.reduce((a, b) => a + b, 0);
+          if (totalPool <= 0) continue;
+
+          const poolsJson = JSON.stringify(m.pools);
+          const marketKey = `${m.chain}:${m.id}`;
+
+          await (c.env.DB as D1Database)
+            .prepare(
+              `INSERT OR IGNORE INTO price_history (market_key, chain, market_id, timestamp, pools, total_pool)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            )
+            .bind(marketKey, m.chain, m.id, now, poolsJson, totalPool)
+            .run();
+        }
+      } catch {
+        // Non-critical — silently ignore snapshot write failures
       }
     }
 
@@ -472,11 +782,12 @@ markets.get('/', async (c) => {
     chainParam &&
     chainParam !== 'stellar' &&
     chainParam !== 'avalanche' &&
+    chainParam !== 'sonic' &&
     chainParam !== 'all'
   ) {
     return c.json(
       {
-        error: `Invalid chain parameter "${chainParam}". Supported chains: stellar, avalanche, all`,
+        error: `Invalid chain parameter "${chainParam}". Supported chains: stellar, avalanche, sonic, all`,
       },
       400
     );
@@ -487,7 +798,9 @@ markets.get('/', async (c) => {
       ? ['stellar']
       : chainParam === 'avalanche'
       ? ['avalanche']
-      : ['stellar', 'avalanche'];
+      : chainParam === 'sonic'
+      ? ['sonic']
+      : ['stellar', 'avalanche', 'sonic'];
 
   let allMarkets: CachedMarket[] = [];
   let allCached = true;
@@ -522,11 +835,12 @@ markets.get('/:id', async (c) => {
   if (
     chainParam &&
     chainParam !== 'stellar' &&
-    chainParam !== 'avalanche'
+    chainParam !== 'avalanche' &&
+    chainParam !== 'sonic'
   ) {
     return c.json(
       {
-        error: `Invalid chain parameter "${chainParam}". Supported chains: stellar, avalanche`,
+        error: `Invalid chain parameter "${chainParam}". Supported chains: stellar, avalanche, sonic`,
       },
       400
     );
@@ -537,7 +851,9 @@ markets.get('/:id', async (c) => {
       ? ['stellar']
       : chainParam === 'avalanche'
       ? ['avalanche']
-      : ['stellar', 'avalanche'];
+      : chainParam === 'sonic'
+      ? ['sonic']
+      : ['stellar', 'avalanche', 'sonic'];
 
   // 1. Search in-memory cache
   for (const chain of searchChains) {
@@ -572,7 +888,8 @@ markets.get('/:id', async (c) => {
                 eq(marketCache.marketId, id),
                 eq(marketCache.id, id),
                 eq(marketCache.id, `stellar:${id}`),
-                eq(marketCache.id, `avalanche:${id}`)
+                eq(marketCache.id, `avalanche:${id}`),
+                eq(marketCache.id, `sonic:${id}`)
               )
         )
         .limit(1);
@@ -619,6 +936,56 @@ markets.get('/:id', async (c) => {
   }
 
   return c.json({ error: `Market ${id} not found.` }, 404);
+});
+
+// ── GET /markets/:id/history ─────────────────────────────────
+// Returns up to 200 price snapshots for a market, sorted by timestamp asc.
+// Used to render the price history chart on the market detail page.
+markets.get('/:id/history', async (c) => {
+  const id = c.req.param('id');
+  const chainParam = c.req.query('chain')?.toLowerCase() as SupportedChain | undefined;
+
+  if (!c.env?.DB) {
+    return c.json({ history: [] });
+  }
+
+  try {
+    const db = drizzle(c.env.DB);
+    const marketKey = chainParam ? `${chainParam}:${id}` : undefined;
+
+    const rows = await (c.env.DB as D1Database)
+      .prepare(
+        marketKey
+          ? `SELECT timestamp, pools, total_pool FROM price_history WHERE market_key = ? ORDER BY timestamp ASC LIMIT 200`
+          : `SELECT timestamp, pools, total_pool FROM price_history WHERE market_id = ? ORDER BY timestamp ASC LIMIT 200`
+      )
+      .bind(marketKey ?? id)
+      .all();
+
+    const history = (rows.results ?? []).map((row: any) => {
+      let pools: number[] = [];
+      try {
+        pools = JSON.parse(row.pools as string);
+      } catch {
+        pools = [];
+      }
+      const total = Number(row.total_pool ?? 0);
+      const percents = pools.map((p) =>
+        total > 0 ? Math.round((p / total) * 100) : Math.round(100 / Math.max(pools.length, 1))
+      );
+      return {
+        timestamp: row.timestamp,
+        pools,
+        totalPool: total,
+        percents,
+      };
+    });
+
+    return c.json({ history });
+  } catch (err) {
+    console.warn('Failed to read price history from D1:', err);
+    return c.json({ history: [] });
+  }
 });
 
 export default markets;

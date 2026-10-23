@@ -5,9 +5,7 @@ import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
 import { LogOut, Copy, Check, Loader2, ExternalLink, Shield } from "lucide-react";
-import ChainSwitcher from "@/components/ChainSwitcher";
-import { useChain } from "@/context/ChainContext";
-import { useAccountModal } from "@rainbow-me/rainbowkit";
+import { useChain, CHAIN_METADATA, SELECTABLE_CHAINS } from "@/context/ChainContext";
 
 function formatAddress(address: string): string {
   if (address.startsWith("0x")) {
@@ -29,8 +27,7 @@ export default function TopBar() {
     disconnect,
     clearError,
   } = useWallet();
-  const { chain, chainMetadata, client } = useChain();
-  const { openAccountModal } = useAccountModal();
+  const { chain, chainMetadata, client, setChain } = useChain();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -38,6 +35,8 @@ export default function TopBar() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const isAvalanche = chain === "avalanche";
+  const isSonic = chain === "sonic";
+  const isEvm = isAvalanche || isSonic;
 
   // Check if connected address is admin/owner
   useEffect(() => {
@@ -46,16 +45,20 @@ export default function TopBar() {
       return;
     }
 
-    const envAdmin = isAvalanche
-      ? (process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ?? process.env.NEXT_PUBLIC_ADMIN_ADDRESS)
-      : (process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ?? process.env.NEXT_PUBLIC_ADMIN_ADDRESS ?? "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
+    const envAdmin = isEvm
+      ? (process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ??
+         process.env.NEXT_PUBLIC_SONIC_ADMIN_ADDRESS ??
+         process.env.NEXT_PUBLIC_ADMIN_ADDRESS)
+      : (process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ??
+         process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
+         "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN");
 
     if (envAdmin && publicKey.toLowerCase() === envAdmin.toLowerCase()) {
       setIsAdmin(true);
       return;
     }
 
-    if (isAvalanche && client.getOwner) {
+    if (isEvm && client.getOwner) {
       client.getOwner()
         .then((owner: string | null) => {
           if (owner && publicKey.toLowerCase() === owner.toLowerCase()) {
@@ -68,7 +71,7 @@ export default function TopBar() {
     } else {
       setIsAdmin(false);
     }
-  }, [connected, publicKey, isAvalanche, client]);
+  }, [connected, publicKey, isEvm, client]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -139,16 +142,16 @@ export default function TopBar() {
               </Link>
             )}
 
-            <ChainSwitcher />
+            {/* Wallet button area — chain selection is in the Connect modal */}
 
             {/* Wallet button area */}
             <div className="relative" ref={dropdownRef}>
             {connected && publicKey ? (
               isWrongNetwork ? (
-                // Connected but on wrong EVM chain — prompt to switch network
+                  // Connected but on wrong EVM chain — prompt to switch network
                 <button
                   onClick={switchNetwork}
-                  title="Wrong network selected. Click to switch to Avalanche Fuji."
+                  title={`Wrong network selected. Click to switch to ${chainMetadata.name}.`}
                   className="text-xs font-bold px-3 py-1.5 rounded-full border transition-all duration-150 flex items-center gap-1.5 cursor-pointer"
                   style={{
                     borderColor: "#E84142",
@@ -158,7 +161,7 @@ export default function TopBar() {
                   }}
                 >
                   <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                  Switch to Fuji
+                  Switch to {chainMetadata.shortName}
                 </button>
               ) : (
                 // Connected — show truncated address with dropdown
@@ -249,22 +252,52 @@ export default function TopBar() {
                   {copied ? "Copied!" : "Copy address"}
                 </button>
 
-                {/* RainbowKit Account Details Modal (Avalanche only) */}
-                {isAvalanche && openAccountModal && (
-                  <button
-                    onClick={() => {
-                      setDropdownOpen(false);
-                      openAccountModal();
-                    }}
+                {/* View on explorer */}
+                {publicKey && (
+                  <a
+                    href={`${chainMetadata.explorerBaseUrl}/address/${publicKey}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setDropdownOpen(false)}
                     className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left"
                     style={{ color: "#F2F4F7" }}
                     onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
                   >
                     <ExternalLink size={14} />
-                    Wallet details
-                  </button>
+                    View on {chainMetadata.shortName}Scan
+                  </a>
                 )}
+
+                {/* Switch chain (inline mini-selector) */}
+                <div style={{ borderTop: "1px solid #1E2435", marginTop: "2px", paddingTop: "2px" }}>
+                  <div className="px-4 py-1.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8B93A7" }}>
+                      Switch Network
+                    </p>
+                  </div>
+                  {SELECTABLE_CHAINS.map((id) => {
+                    const m = CHAIN_METADATA[id];
+                    const isActive = id === chain;
+                    return (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          setChain(id);
+                          setDropdownOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-sm transition-colors text-left"
+                        style={{ color: isActive ? m.color : "#8B93A7" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                      >
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: m.color }} />
+                        {m.name}
+                        {isActive && <Check size={12} style={{ marginLeft: "auto" }} />}
+                      </button>
+                    );
+                  })}
+                </div>
 
                 {/* Admin Panel (admin only) */}
                 {isAdmin && (

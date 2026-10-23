@@ -1,17 +1,19 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { MARKETS, getMarket, formatPool, timeRemaining } from "@/lib/markets";
+import { getMarket, formatPool, timeRemaining, loadMarketsWithSource, mapBackendMarket, type Market } from "@/lib/markets";
 import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
+import PriceChart from "@/components/PriceChart";
 
 interface Props {
   params: Promise<{ id: string }>;
 }
 
-export function generateStaticParams() {
-  return MARKETS.map((m) => ({ id: m.id }));
-}
+// Market pages are rendered on-demand (not statically generated).
+// The backend may not be reachable during build (CI), so we avoid
+// generateStaticParams + static generation that would time out fetching.
+export const dynamic = "force-dynamic";
 
 const CATEGORY_COLORS: Record<string, string> = {
   Sports: "#3B82F6", Crypto: "#F59E0B", Finance: "#8B5CF6",
@@ -20,7 +22,42 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export default async function MarketPage({ params }: Props) {
   const { id } = await params;
-  const market = getMarket(id);
+
+  let market = undefined as Market | undefined;
+
+  // 1. Try backend by id across all chains (authoritative source)
+  try {
+    const { apiFetch } = await import("@/lib/api");
+    for (const chain of ["sonic", "avalanche", "stellar"]) {
+      try {
+        const data = await apiFetch<{ market?: any }>(`/markets/${id}?chain=${chain}`);
+          if (data?.market) {
+            market = mapBackendMarket(data.market);
+            break;
+          }
+        } catch {
+          // Try next chain
+        }
+      }
+    } catch {
+      // Backend unavailable — fall through to chain fallback
+    }
+
+  // 2. If still not found, try loading all live markets and find by id
+  if (!market) {
+    try {
+      const { markets: liveMarkets } = await loadMarketsWithSource();
+      market = liveMarkets.find((m) => m.id === id);
+    } catch {
+      // Nothing we can do
+    }
+  }
+
+  // 3. Fall back to mock data as last resort
+  if (!market) {
+    market = getMarket(id);
+  }
+
   if (!market) notFound();
 
   const outcomes = market.outcomes.length >= 2 ? market.outcomes : ["YES", "NO"];
@@ -34,6 +71,20 @@ export default async function MarketPage({ params }: Props) {
   const isBinary = outcomes.length === 2;
 
   const catColor = CATEGORY_COLORS[market.category] ?? "#8B93A7";
+
+  // Status flags
+  const endsAtMs = new Date(market.endsAt).getTime();
+  const isPastCloseTime = Date.now() >= endsAtMs;
+  const isClosed = isPastCloseTime && market.status === "open";
+  const isCancelled = (market as any).status === "cancelled";
+  const isResolved = market.status !== "open" && !isCancelled;
+
+  // Status label for the stats bar
+  let statusLabel = "Open";
+  let statusColor = "#00D084";
+  if (isCancelled) { statusLabel = "Cancelled"; statusColor = "#F59E0B"; }
+  else if (isClosed) { statusLabel = "Closed"; statusColor = "#8B93A7"; }
+  else if (isResolved) { statusLabel = winner ?? "Resolved"; statusColor = outcomeColor(market.resolvedOutcomeIndex ?? 0); }
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-14">
@@ -71,6 +122,32 @@ export default async function MarketPage({ params }: Props) {
         >
           {market.question}
         </h1>
+
+        {/* ── Closed / Cancelled banners ───────────────────────── */}
+        {isCancelled && (
+          <div
+            className="rounded-xl px-4 py-3 mb-6 flex items-center gap-3 text-sm"
+            style={{ backgroundColor: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", color: "#F59E0B" }}
+          >
+            <span className="text-base">⚠️</span>
+            <div>
+              <p className="font-bold">Market Cancelled</p>
+              <p className="text-xs opacity-80 mt-0.5">This market was cancelled. All stakers can claim a refund.</p>
+            </div>
+          </div>
+        )}
+        {isClosed && (
+          <div
+            className="rounded-xl px-4 py-3 mb-6 flex items-center gap-3 text-sm"
+            style={{ backgroundColor: "rgba(139,147,167,0.1)", border: "1px solid rgba(139,147,167,0.2)", color: "#8B93A7" }}
+          >
+            <span className="text-base">⏳</span>
+            <div>
+              <p className="font-bold">Market Closed — Awaiting Resolution</p>
+              <p className="text-xs opacity-80 mt-0.5">Trading has ended. The admin will resolve the outcome shortly.</p>
+            </div>
+          </div>
+        )}
 
         {/* ── ODDS BAR — N outcomes, wraps cleanly ────────────── */}
         <div
@@ -132,6 +209,19 @@ export default async function MarketPage({ params }: Props) {
             </p>
           )}
         </div>
+
+        {/* ── Resolution criteria (Sonic markets) ─────────────── */}
+        {(market as any).resolutionCriteria && (
+          <div
+            className="mt-4 rounded-xl px-4 py-3 text-xs"
+            style={{ backgroundColor: "#161B26", border: "1px solid #1E2435" }}
+          >
+            <p className="font-semibold mb-1 uppercase tracking-wider" style={{ color: "#8B93A7" }}>
+              Resolution Criteria
+            </p>
+            <p style={{ color: "#D0D5DD", lineHeight: 1.6 }}>{(market as any).resolutionCriteria}</p>
+          </div>
+        )}
       </div>
 
       {/* ── Two-column body ──────────────────────────────────── */}
@@ -141,32 +231,11 @@ export default async function MarketPage({ params }: Props) {
         <div className="flex-1 flex flex-col gap-5">
 
           {/* Chart placeholder */}
-          <div
-            className="rounded-2xl p-6 flex flex-col items-center justify-center"
-            style={{
-              background: "linear-gradient(135deg, #161B26, #131820)",
-              border: "1px solid #1E2435",
-              minHeight: "200px",
-            }}
-          >
-            <svg width="100%" height="72" viewBox="0 0 300 72"
-              preserveAspectRatio="none" className="mb-3 opacity-50">
-              <defs>
-                <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00D084" stopOpacity="0.35" />
-                  <stop offset="100%" stopColor="#00D084" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <path d="M0,55 C20,50 40,28 70,32 C100,36 120,18 150,22
-                       C180,26 200,12 230,15 C260,18 280,24 300,18"
-                fill="none" stroke="#00D084" strokeWidth="2" />
-              <path d="M0,55 C20,50 40,28 70,32 C100,36 120,18 150,22
-                       C180,26 200,12 230,15 C260,18 280,24 300,18 L300,72 L0,72 Z"
-                fill="url(#cg)" />
-            </svg>
-            <p className="text-sm font-medium" style={{ color: "#8B93A7" }}>Price history</p>
-            <p className="text-xs mt-0.5" style={{ color: "#2A3347" }}>Coming soon</p>
-          </div>
+          <PriceChart
+            marketId={id}
+            chain={(market as any).chain ?? undefined}
+            outcomes={outcomes}
+          />
 
           {/* Market stats */}
           <div
@@ -198,22 +267,36 @@ export default async function MarketPage({ params }: Props) {
               </p>
               <p
                 className="text-xl font-extrabold"
-                style={{
-                  color: market.status === "open" ? "#00D084" : outcomeColor(market.resolvedOutcomeIndex ?? 0),
-                }}
+                style={{ color: statusColor }}
               >
-                {market.status === "open" ? "Open" : (winner ?? "Resolved")}
+                {statusLabel}
               </p>
             </div>
           </div>
+
+          {/* Resolution criteria — shown for Sonic markets */}
+          {(market as any).resolutionCriteria && (
+            <div
+              className="rounded-2xl p-5"
+              style={{
+                background: "linear-gradient(135deg, #161B26, #131820)",
+                border: "1px solid #1E2435",
+              }}
+            >
+              <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#8B93A7" }}>
+                Resolution Criteria
+              </p>
+              <p className="text-sm leading-relaxed" style={{ color: "#D0D5DD" }}>
+                {(market as any).resolutionCriteria}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* RIGHT — sticky trade + position */}
         <div className="lg:w-80 xl:w-96 flex flex-col gap-5">
           <div className="lg:sticky lg:top-28 flex flex-col gap-5">
-            <TradePanel market={market} />
-
-            {/* Position card & Claim Winnings */}
+            {!isCancelled && !isClosed && <TradePanel market={market} />}
             <PositionCard market={market} />
           </div>
         </div>

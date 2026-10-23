@@ -1,40 +1,43 @@
 /**
  * auth.ts
- * Handles the post-connect authentication handshake:
+ * Post-connect authentication handshake:
  *   1. Build a JSON message: { address, timestamp }
- *   2. Ask Freighter to sign it (Ed25519)
- *   3. POST to /auth/login and store the returned JWT
+ *   2. Ask the wallet to sign it
+ *   3. POST to /auth/login — the backend verifies the signature and sets
+ *      an HttpOnly session cookie. No token is returned to JS.
  *
- * Throws WalletError (code "AUTH_FAILED") if the backend rejects.
+ * Logout sends POST /auth/logout which clears the cookie server-side.
  */
 
 import { signMessage, WalletError } from "@/lib/wallet";
-import { apiFetch, storeSessionToken } from "@/lib/api";
-
-interface LoginResponse {
-  token: string;
-}
+import { apiFetch } from "@/lib/api";
 
 export async function loginWithWallet(address: string): Promise<void> {
-  // 1. Build the message the backend will verify
-  const message = JSON.stringify({ address, timestamp: Date.now() });
+  // Include a random nonce so every login produces a distinct JWT even for
+  // the same address — the nonce is part of the signed payload.
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 
-  // 2. Sign with Freighter — throws WalletError on rejection
+  const message = JSON.stringify({ address, timestamp: Date.now(), nonce });
   const signedMessage = await signMessage(message);
 
-  // 3. POST to backend — throws ApiError on non-2xx
-  let response: LoginResponse;
   try {
-    response = await apiFetch<LoginResponse>("/auth/login", {
+    await apiFetch<{ ok: boolean }>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ address, message, signedMessage }),
     });
   } catch (err) {
-    const detail =
-      err instanceof Error ? err.message : "Backend authentication failed.";
+    const detail = err instanceof Error ? err.message : "Backend authentication failed.";
     throw new WalletError("AUTH_FAILED", detail);
   }
+  // Cookie is set by the backend — nothing to store in JS.
+}
 
-  // 4. Persist the JWT for all future requests
-  storeSessionToken(response.token);
+export async function logoutFromBackend(): Promise<void> {
+  try {
+    await apiFetch<{ ok: boolean }>("/auth/logout", { method: "POST" });
+  } catch {
+    // Best-effort — wallet disconnect still clears local state.
+  }
 }

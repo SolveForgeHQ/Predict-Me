@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MARKETS, Market, formatPool, timeRemaining } from "@/lib/markets";
+import { Market, formatPool, timeRemaining } from "@/lib/markets";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/context/ToastContext";
 import { useChain } from "@/context/ChainContext";
 import StatusBanner from "@/components/StatusBanner";
 import { parseTransactionError } from "@/lib/errors";
-import { Wallet, ShieldOff, Loader2 } from "lucide-react";
+import { Wallet, ShieldOff, Loader2, XCircle } from "lucide-react";
 
 // Describes which step of the on-chain flow we're in
 type PendingStep =
@@ -34,13 +34,36 @@ export default function AdminPage() {
   const { publicKey, connected, connecting, connect, isWrongNetwork, switchNetwork } = useWallet();
   const toast = useToast();
   const { chain, chainMetadata, client } = useChain();
-  const [markets, setMarkets] = useState<Market[]>(MARKETS);
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [isLoadingMarkets, setIsLoadingMarkets] = useState(false);
+
+  // Load existing markets from the backend when the admin page mounts or chain changes
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchMarkets() {
+      setIsLoadingMarkets(true);
+      try {
+        const { loadMarketsWithSource } = await import("@/lib/markets");
+        const res = await loadMarketsWithSource(chain);
+        if (!cancelled && res.markets.length > 0) {
+          setMarkets(res.markets);
+        }
+      } catch {
+        // Silently ignore — admin can still create new markets
+      } finally {
+        if (!cancelled) setIsLoadingMarkets(false);
+      }
+    }
+    fetchMarkets();
+    return () => { cancelled = true; };
+  }, [chain]);
 
   // Form fields
   const [question, setQuestion] = useState("");
   const [endDate, setEndDate]   = useState("");
   const [category, setCategory] = useState("General");
   const [outcomeInputs, setOutcomeInputs] = useState<string[]>(["YES", "NO"]);
+  const [resolutionCriteria, setResolutionCriteria] = useState("");
 
   // Feedback for Create Market
   const [pendingStep, setPendingStep] = useState<PendingStep | null>(null);
@@ -52,16 +75,18 @@ export default function AdminPage() {
   const [resolveError, setResolveError]     = useState<{ marketId: string; message: string } | null>(null);
   const [resolveSuccess, setResolveSuccess] = useState<{ marketId: string; txHash: string; outcomeIndex: number; outcomeLabel: string } | null>(null);
 
-  // On-chain owner state for Avalanche
+  // On-chain owner state for EVM chains (Avalanche & Sonic)
   const [onChainOwner, setOnChainOwner] = useState<string | null>(null);
   const [isLoadingOwner, setIsLoadingOwner] = useState(false);
 
   const isAvalanche = chain === "avalanche";
+  const isSonic = chain === "sonic";
+  const isEvm = isAvalanche || isSonic;
 
-  // Query contract owner when on Avalanche
+  // Query contract owner when on an EVM chain (both Avalanche and Sonic have getOwner)
   useEffect(() => {
     let cancelled = false;
-    if (isAvalanche && client.getOwner) {
+    if (isEvm && client.getOwner) {
       setIsLoadingOwner(true);
       client.getOwner()
         .then((owner) => {
@@ -81,29 +106,30 @@ export default function AdminPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAvalanche, client]);
+  }, [isEvm, client]);
 
   // Environment fallback addresses
-  const configuredAvalancheAdmin =
+  const configuredEvmAdmin =
     process.env.NEXT_PUBLIC_AVALANCHE_ADMIN_ADDRESS ??
+    process.env.NEXT_PUBLIC_SONIC_ADMIN_ADDRESS ??
     process.env.NEXT_PUBLIC_ADMIN_ADDRESS;
   const configuredStellarAdmin =
     process.env.NEXT_PUBLIC_STELLAR_ADMIN_ADDRESS ??
     process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
     "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
 
-  const expectedOwner = isAvalanche
-    ? (onChainOwner ?? configuredAvalancheAdmin ?? null)
+  const expectedOwner = isEvm
+    ? (onChainOwner ?? configuredEvmAdmin ?? null)
     : configuredStellarAdmin;
 
   const isAdmin = Boolean(
     connected &&
     publicKey &&
     (
-      isAvalanche
+      isEvm
         ? (
             (onChainOwner && publicKey.toLowerCase() === onChainOwner.toLowerCase()) ||
-            (configuredAvalancheAdmin && publicKey.toLowerCase() === configuredAvalancheAdmin.toLowerCase())
+            (configuredEvmAdmin && publicKey.toLowerCase() === configuredEvmAdmin.toLowerCase())
           )
         : (publicKey === configuredStellarAdmin)
     )
@@ -156,6 +182,7 @@ export default function AdminPage() {
         endTime: endTimestampSec,
         category,
         outcomes,
+        resolutionCriteria: resolutionCriteria.trim() || undefined,
         callerAddress: publicKey ?? undefined,
       });
 
@@ -174,6 +201,7 @@ export default function AdminPage() {
       setEndDate("");
       setCategory("General");
       setOutcomeInputs(["YES", "NO"]);
+      setResolutionCriteria("");
 
       // Optimistically add to the local list so the admin sees it immediately
       const createdId = result.data ?? result.txHash;
@@ -274,6 +302,41 @@ export default function AdminPage() {
       console.error("[admin] resolveMarket error:", err);
     } finally {
       setResolvingState(null);
+    }
+  };
+
+  // ── Cancel market (Sonic only) ─────────────────────────────
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<{ marketId: string; message: string } | null>(null);
+  const [cancelSuccess, setCancelSuccess] = useState<{ marketId: string; txHash: string } | null>(null);
+
+  const handleCancel = async (marketId: string) => {
+    if (!isSonic || isWrongNetwork) {
+      if (isWrongNetwork) await switchNetwork();
+      return;
+    }
+
+    const sonicClient = client as any;
+    if (typeof sonicClient.cancelMarket !== "function") return;
+
+    setCancelError(null);
+    setCancelSuccess(null);
+    setCancelingId(marketId);
+
+    try {
+      const result = await sonicClient.cancelMarket(marketId);
+      setCancelSuccess({ marketId, txHash: result.txHash });
+      toast.success("Market Cancelled!", `Market ${marketId} cancelled on ${chainMetadata.name}.`);
+      setMarkets((prev) =>
+        prev.map((m) => (m.id === marketId ? { ...m, status: "resolved" as any } : m))
+      );
+    } catch (err) {
+      const message = parseTransactionError(err, { chain, currency: chainMetadata.currency, action: "resolve" });
+      setCancelError({ marketId, message });
+      toast.error("Cancel Failed", message);
+      console.error("[admin] cancelMarket error:", err);
+    } finally {
+      setCancelingId(null);
     }
   };
 
@@ -585,6 +648,38 @@ export default function AdminPage() {
               />
             </div>
 
+            {/* Resolution criteria (Sonic requires this) */}
+            {isSonic && (
+              <div>
+                <label
+                  className="block text-xs font-semibold mb-2 uppercase tracking-wider"
+                  style={{ color: "#8B93A7" }}
+                >
+                  Resolution Criteria
+                </label>
+                <textarea
+                  placeholder="e.g. The market resolves YES if X happens before the close time, as verified by Y source."
+                  value={resolutionCriteria}
+                  onChange={(e) => setResolutionCriteria(e.target.value)}
+                  required={isSonic}
+                  disabled={isPending || isResolving}
+                  rows={3}
+                  className="w-full rounded-xl py-3 px-4 text-sm outline-none disabled:opacity-50 resize-none"
+                  style={{
+                    backgroundColor: "#0B0E14",
+                    border: "1px solid #1E2435",
+                    color: "#F2F4F7",
+                    transition: "border-color 0.15s ease",
+                  }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = chainMetadata.borderColor)}
+                  onBlur={(e)  => (e.currentTarget.style.borderColor = "#1E2435")}
+                />
+                <p className="text-[11px] mt-1.5" style={{ color: "#2A3347" }}>
+                  Required on Sonic. Describes how the outcome will be determined, for auditability.
+                </p>
+              </div>
+            )}
+
             {/* Pending state */}
             {isPending && (
               <StatusBanner variant="pending" stepLabel={STEP_LABEL[pendingStep!]} />
@@ -601,6 +696,7 @@ export default function AdminPage() {
                 variant="success"
                 title="Market created on-chain!"
                 txHash={txHash}
+                explorerBaseUrl={chainMetadata.explorerBaseUrl}
               />
             )}
 
@@ -649,11 +745,25 @@ export default function AdminPage() {
             className="text-xs font-semibold px-2 py-0.5 rounded-full"
             style={{ backgroundColor: "#1E2435", color: "#8B93A7" }}
           >
-            {markets.length}
+            {isLoadingMarkets ? "…" : markets.length}
           </span>
+          {isLoadingMarkets && (
+            <Loader2 size={13} className="animate-spin" style={{ color: "#8B93A7" }} />
+          )}
         </div>
 
-        <div className="flex flex-col gap-3">
+        {isLoadingMarkets && markets.length === 0 ? (
+          <div className="flex flex-col gap-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="rounded-xl h-16 animate-pulse"
+                style={{ backgroundColor: "#111620", border: "1px solid #1E2435" }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
           {markets.map((market) => {
             const isThisResolving = resolvingState?.marketId === market.id;
             const hasError = resolveError?.marketId === market.id;
@@ -714,7 +824,7 @@ export default function AdminPage() {
                           <button
                             key={`${label}-${i}`}
                             onClick={() => handleResolve(market.id, i)}
-                            disabled={isResolving || isPending}
+                            disabled={isResolving || isPending || cancelingId === market.id}
                             title={`Resolve to ${label}`}
                             className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed max-w-40 truncate"
                             style={{
@@ -740,6 +850,32 @@ export default function AdminPage() {
                           </button>
                         );
                       })}
+                      {/* Sonic: Cancel market button */}
+                      {isSonic && (
+                        <button
+                          onClick={() => handleCancel(market.id)}
+                          disabled={isResolving || isPending || cancelingId === market.id}
+                          title="Cancel market (refunds all stakers)"
+                          className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all hover:opacity-80 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                          style={{
+                            backgroundColor: "rgba(245, 158, 11, 0.12)",
+                            color: "#F59E0B",
+                            border: "1px solid rgba(245, 158, 11, 0.3)",
+                          }}
+                        >
+                          {cancelingId === market.id ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" />
+                              Cancelling…
+                            </>
+                          ) : (
+                            <>
+                              <XCircle size={12} />
+                              Cancel
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -762,13 +898,32 @@ export default function AdminPage() {
                       variant="success"
                       title={`Market resolved to ${resolveSuccess.outcomeLabel} on-chain!`}
                       txHash={resolveSuccess.txHash}
+                      explorerBaseUrl={chainMetadata.explorerBaseUrl}
+                    />
+                  </div>
+                )}
+
+                {/* Cancel error / success */}
+                {cancelError?.marketId === market.id && (
+                  <div className="mt-3">
+                    <StatusBanner variant="error" title="Cancel Failed" message={cancelError.message} />
+                  </div>
+                )}
+                {cancelSuccess?.marketId === market.id && (
+                  <div className="mt-3">
+                    <StatusBanner
+                      variant="success"
+                      title="Market cancelled on-chain!"
+                      txHash={cancelSuccess.txHash}
+                      explorerBaseUrl={chainMetadata.explorerBaseUrl}
                     />
                   </div>
                 )}
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

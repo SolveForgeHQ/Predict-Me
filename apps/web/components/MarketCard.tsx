@@ -18,8 +18,13 @@ const CATEGORY_COLORS: Record<string, string> = {
 function getLabel(market: Market): { Icon: React.ElementType; text: string; color: string } | null {
   const diff = new Date(market.endsAt).getTime() - Date.now();
   const hours = diff / (1000 * 60 * 60);
+  const isPastClose = diff <= 0;
+  const isCancelled = (market as any).status === "cancelled";
+
+  if (isCancelled) return { Icon: Clock, text: "Cancelled", color: "#F59E0B" };
+  if (isPastClose && market.status === "open") return { Icon: Clock, text: "Closed", color: "#8B93A7" };
   if (diff > 0 && hours <= 24) return { Icon: Clock, text: "Closing soon", color: "#F59E0B" };
-  if (market.totalPool >= 200_000) return { Icon: Flame, text: "Trending",     color: "#FF4D5E" };
+  if (market.totalPool >= 200_000) return { Icon: Flame, text: "Trending", color: "#FF4D5E" };
   return null;
 }
 

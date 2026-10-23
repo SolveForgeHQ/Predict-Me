@@ -1,4 +1,4 @@
-export type MarketStatus = "open" | "closed" | "resolved";
+export type MarketStatus = "open" | "closed" | "resolved" | "cancelled";
 export type Outcome = "yes" | "no";
 
 export const MIN_OUTCOMES = 2;
@@ -17,6 +17,7 @@ export interface Market {
   pools: number[];
   totalPool?: number;
   resolvedOutcomeIndex?: number;
+  resolutionCriteria?: string;
   // ── Backward-compat (derived when outcomes.length === 2) ──
   yesPool?: number;
   noPool?: number;
@@ -48,6 +49,8 @@ export interface CreateMarketParams {
   category?: string;
   /** N >= 2 labels. Defaults to ["YES","NO"] for binary compat. */
   outcomes?: string[];
+  /** Sonic: criteria string emitted in MarketCreated event for auditability. */
+  resolutionCriteria?: string;
   callerAddress?: string;
 }
 

@@ -1,4 +1,7 @@
-import { Target, Crosshair, Flame, RefreshCw, BarChart2, Trophy, Gift } from "lucide-react";
+"use client";
+
+import { Target, Crosshair, Flame, RefreshCw, BarChart2, Trophy, Gift, Clock } from "lucide-react";
+import { useChain } from "@/context/ChainContext";
 
 const QUESTS = [
   { Icon: Crosshair, title: "First Prediction",   desc: "Place your first YES or NO bet.", reward: "50 pts",   done: false },
@@ -9,9 +12,48 @@ const QUESTS = [
 ];
 
 export default function QuestsPage() {
+  const { chain, chainMetadata } = useChain();
+
+  if (chain === "avalanche") {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        <div className="flex items-center gap-3 mb-6">
+          <Target size={22} color="#00D084" />
+          <h1 className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>Quests</h1>
+        </div>
+        <div
+          className="rounded-2xl p-8 flex flex-col items-center text-center gap-4"
+          style={{ background: "linear-gradient(135deg, #161B26, #131820)", border: "1px solid #1E2435" }}
+        >
+          <div
+            className="w-14 h-14 rounded-2xl flex items-center justify-center"
+            style={{ backgroundColor: `${chainMetadata.color}18`, border: `1px solid ${chainMetadata.color}33` }}
+          >
+            <Clock size={26} color={chainMetadata.color} strokeWidth={1.5} />
+          </div>
+          <div>
+            <p className="text-lg font-extrabold mb-1" style={{ color: "#F2F4F7" }}>
+              Coming soon for Avalanche
+            </p>
+            <p className="text-sm" style={{ color: "#8B93A7" }}>
+              Quest tracking and rewards are live on Sonic Testnet. Avalanche
+              quest support is planned once the chain integration matures.
+            </p>
+          </div>
+          <span
+            className="text-xs font-semibold px-3 py-1.5 rounded-full"
+            style={{ backgroundColor: `${chainMetadata.color}18`, color: chainMetadata.color }}
+          >
+            Live on Sonic · Avalanche coming soon
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Sonic — show quests
   return (
     <div className="max-w-2xl mx-auto px-4 py-6">
-      {/* Header */}
       <div className="flex items-center gap-3 mb-2">
         <Target size={22} color="#00D084" />
         <h1 className="text-2xl font-extrabold" style={{ color: "#F2F4F7" }}>Quests</h1>
@@ -23,10 +65,7 @@ export default function QuestsPage() {
       {/* Spin the wheel CTA */}
       <div
         className="rounded-2xl p-5 mb-5 flex items-center gap-4"
-        style={{
-          background: "linear-gradient(135deg, #1a1200, #161B26)",
-          border: "1px solid #F59E0B33",
-        }}
+        style={{ background: "linear-gradient(135deg, #1a1200, #161B26)", border: "1px solid #F59E0B33" }}
       >
         <div
           className="w-12 h-12 rounded-full flex items-center justify-center shrink-0"
@@ -58,10 +97,7 @@ export default function QuestsPage() {
               opacity: done ? 0.6 : 1,
             }}
           >
-            <div
-              className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-              style={{ backgroundColor: "#1E2435" }}
-            >
+            <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: "#1E2435" }}>
               <Icon size={16} color="#8B93A7" strokeWidth={1.8} />
             </div>
             <div className="flex-1">
