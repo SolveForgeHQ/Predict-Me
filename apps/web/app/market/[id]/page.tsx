@@ -25,10 +25,10 @@ export default async function MarketPage({ params }: Props) {
 
   let market = undefined as Market | undefined;
 
-  // 1. Try backend by id across all chains (authoritative source)
+  // 1. Try backend by id — Avalanche first since it's the active chain
   try {
     const { apiFetch } = await import("@/lib/api");
-    for (const chain of ["sonic", "avalanche", "stellar"]) {
+    for (const chain of ["avalanche", "stellar"]) {
       try {
         const data = await apiFetch<{ market?: any }>(`/markets/${id}?chain=${chain}`);
           if (data?.market) {
