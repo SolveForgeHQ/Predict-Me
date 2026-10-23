@@ -15,7 +15,8 @@ import {
 } from "@rainbow-me/rainbowkit/wallets";
 import { WagmiProvider } from "wagmi";
 import { avalanche, avalancheFuji } from "wagmi/chains";
-import { sonicTestnet } from "@predict-me/core";
+// sonicTestnet removed from UI — uncomment to re-add
+// import { sonicTestnet } from "@predict-me/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
@@ -30,7 +31,7 @@ export const wagmiConfig = getDefaultConfig({
       iconUrl: "/avalanche-logo.png",
     },
     avalanche,
-    sonicTestnet,
+    // sonicTestnet, // uncomment to re-add Sonic
   ],
   ssr: true,
   wallets: [
