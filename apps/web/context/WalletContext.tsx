@@ -15,9 +15,7 @@ import {
 } from "react";
 import { loginWithWallet, logoutFromBackend } from "@/lib/auth";
 import { useChain, CHAIN_METADATA } from "@/context/ChainContext";
-import { useAccount, useDisconnect, useSwitchChain, useConnect } from "wagmi";
-import { reconnect } from "@wagmi/core";
-import { wagmiConfig } from "@/providers/RainbowWeb3Provider";
+import { useAccount, useDisconnect, useSwitchChain } from "wagmi";
 
 type WalletErrorCode =
   | "NOT_INSTALLED"
@@ -73,11 +71,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [isEvm, switchChainAsync, expectedEvmChainId]);
 
   // ── Auto-reconnect on page load ──
-  // wagmi v2 handles this via its own storage, but we also trigger
-  // reconnect explicitly to catch sessions that weren't persisted by wagmi.
-  useEffect(() => {
-    reconnect(wagmiConfig);
-  }, []);
+  // WagmiProvider handles this automatically via reconnectOnMount (default true).
+  // No manual reconnect call needed.
 
   const publicKey = isEvm ? (evmAddress ?? null) : null;
   const connected = isEvm ? Boolean(isEvmConnected && evmAddress) : false;
