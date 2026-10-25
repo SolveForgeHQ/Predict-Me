@@ -23,13 +23,14 @@ const app = new Hono<{ Bindings: EnvBindings }>();
 
 // ── CORS ─────────────────────────────────────────────────────
 // credentials: true so the HttpOnly session cookie is sent cross-origin.
-// origin is restricted to the configured frontend(s) — never wildcard.
+// origin is strictly restricted to origins in FRONTEND_ORIGIN — never wildcard.
 app.use('*', cors({
   origin: (origin, c) => {
     const allowed = (c.env?.FRONTEND_ORIGIN ?? 'http://localhost:3000')
       .split(',')
-      .map((o: string) => o.trim());
-    return allowed.includes(origin) ? origin : allowed[0];
+      .map((o: string) => o.trim())
+      .filter((o: string) => Boolean(o) && o !== '*');
+    return origin && allowed.includes(origin) ? origin : null;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
   allowHeaders: ['Content-Type'],
@@ -94,25 +95,32 @@ app.route('/stats', statsRouter);
 // ── Cron handler — Cloudflare Scheduled Worker ───────────────
 // Triggered every minute via the schedule in wrangler.toml.
 // Also callable directly from tests via `scheduled(event, env, ctx)`.
+// Subrequest budget: Workers Free plan allows max 50 subrequests per run.
+// Split caps across chains:
+//   - Sonic: 5 ranges of 1,000 blocks = 5,000 blocks/run (~6-11 subrequests)
+//   - Avalanche: 20 ranges of 100 blocks = 2,000 blocks/run (~21-26 subrequests)
+// Total combined subrequests <= ~37, leaving safety headroom for cache and RPC calls.
 const scheduled: ExportedHandlerScheduledHandler<EnvBindings> = async (_event, env, _ctx) => {
   if (!env.DB) {
     console.warn('[cron] D1 binding not available — skipping indexer');
     return;
   }
 
-  // Run both indexers in parallel
+  // Run both indexers in parallel with explicit per-run caps
   const [sonicResult, avalancheResult] = await Promise.allSettled([
     runSonicIndexer({
       DB:                     env.DB,
       SONIC_RPC_URL:          env.SONIC_RPC_URL,
       SONIC_CONTRACT_ADDRESS: env.SONIC_CONTRACT_ADDRESS,
       SONIC_START_BLOCK:      env.SONIC_START_BLOCK,
+      maxRanges:              5,
     }),
     runAvalancheIndexer({
       DB:                        env.DB,
       AVALANCHE_RPC_URL:         env.AVALANCHE_RPC_URL,
       AVALANCHE_CONTRACT_ADDRESS:env.AVALANCHE_CONTRACT_ADDRESS,
       AVALANCHE_START_BLOCK:     env.AVALANCHE_START_BLOCK,
+      maxRanges:                 20,
     }),
   ]);
 

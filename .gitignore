@@ -49,6 +49,9 @@ out/
 # Wrangler local dev state
 backend/.wrangler/
 
+# Wrangler secrets (never commit — copy from .dev.vars.example)
+backend/.dev.vars
+
 # Foundry broadcast artifacts (contain deployment keys/tx data)
 blockchain/sonic/contracts/broadcast/
 blockchain/avalanche/contracts/broadcast/

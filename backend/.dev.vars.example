@@ -1,0 +1,5 @@
+# Copy this file to .dev.vars and fill in real values for local development.
+# .dev.vars is gitignored — never commit secrets.
+
+# Required: shared JWT secret for local auth
+JWT_SECRET=dev-secret-change-me-in-production

@@ -2,10 +2,9 @@ name = "predict-me-backend"
 compatibility_date = "2024-12-24"
 main = "src/index.ts"
 
-# Development-only placeholder. For production, set JWT_SECRET via:
-#   wrangler secret put JWT_SECRET
+# Production variables (non-secret only).
+# Secrets such as JWT_SECRET must be set via `wrangler secret put <KEY>`.
 [vars]
-JWT_SECRET = "dev-secret-change-me-in-production"
 SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org"
 MARKET_CONTRACT_ID = "CCGM6LQRQNQGMUXMXHICCH73CDBYOTMV5LEJ7JWWXUBXLRFZJCPAHHXI"
 AVALANCHE_RPC_URL = "https://api.avax-test.network/ext/bc/C/rpc"

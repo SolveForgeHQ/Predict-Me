@@ -397,7 +397,149 @@ describe('Leaderboard and Stats Routes', () => {
     });
   });
 
-  // ── 7. 60-second in-memory caching ──────────────────────────
+  // ── 7. Cancelled market exclusion ──────────────────────────
+  describe('Cancelled Market Exclusion', () => {
+    const walletC = '0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+
+    /**
+     * 6 markets: 5 resolved (walletC wins all against walletD) + 1 cancelled.
+     * The cancelled market must NOT count toward resolved_markets, wins, profit, or the leaderboard rank.
+     */
+    function make5ResolvedPlus1Cancelled(): ChainEventInput[] {
+      const baseTime = 1770000000;
+      const events: ChainEventInput[] = [];
+      const walletD = '0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD';
+
+      // 5 normal resolved markets walletC wins (walletD loses)
+      for (let i = 1; i <= 5; i++) {
+        const mId = String(i);
+        events.push(
+          {
+            chain: 'sonic',
+            txHash: `0xtx_c_${i}`,
+            logIndex: 0,
+            blockNumber: 100 + i,
+            blockTime: baseTime + i * 100,
+            eventName: 'MarketCreated',
+            marketId: mId,
+          },
+          // walletC bets YES (winning side)
+          {
+            chain: 'sonic',
+            txHash: `0xtx_b_${i}_c`,
+            logIndex: 1,
+            blockNumber: 100 + i,
+            blockTime: baseTime + i * 100 + 10,
+            eventName: 'SharesBought',
+            marketId: mId,
+            wallet: walletC,
+            outcomeIndex: '0',
+            amount: '10000000',
+          },
+          // walletD bets NO (losing side) — creates opposing pool so walletC actually profits
+          {
+            chain: 'sonic',
+            txHash: `0xtx_b_${i}_d`,
+            logIndex: 2,
+            blockNumber: 100 + i,
+            blockTime: baseTime + i * 100 + 20,
+            eventName: 'SharesBought',
+            marketId: mId,
+            wallet: walletD,
+            outcomeIndex: '1',
+            amount: '10000000',
+          },
+          {
+            chain: 'sonic',
+            txHash: `0xtx_r_${i}`,
+            logIndex: 3,
+            blockNumber: 100 + i,
+            blockTime: baseTime + i * 100 + 50,
+            eventName: 'MarketResolved',
+            marketId: mId,
+            outcomeIndex: '0', // YES wins
+          },
+        );
+      }
+
+      // 1 cancelled market — walletC staked but the market was cancelled & refunded
+      events.push(
+        {
+          chain: 'sonic',
+          txHash: '0xtx_c_cancelled',
+          logIndex: 0,
+          blockNumber: 200,
+          blockTime: baseTime + 600,
+          eventName: 'MarketCreated',
+          marketId: '99',
+        },
+        {
+          chain: 'sonic',
+          txHash: '0xtx_b_cancelled',
+          logIndex: 1,
+          blockNumber: 200,
+          blockTime: baseTime + 610,
+          eventName: 'SharesBought',
+          marketId: '99',
+          wallet: walletC,
+          outcomeIndex: '0',
+          amount: '50000000',
+        },
+        {
+          chain: 'sonic',
+          txHash: '0xtx_cancelled',
+          logIndex: 2,
+          blockNumber: 200,
+          blockTime: baseTime + 620,
+          eventName: 'MarketCancelled',
+          marketId: '99',
+        },
+        {
+          chain: 'sonic',
+          txHash: '0xtx_refund',
+          logIndex: 3,
+          blockNumber: 200,
+          blockTime: baseTime + 625,
+          eventName: 'Refunded',
+          marketId: '99',
+          wallet: walletC,
+          amount: '50000000',
+        },
+      );
+
+      return events;
+    }
+
+    it('excludes cancelled markets from the leaderboard and /stats resolved count', async () => {
+      const app = createTestApp(createMockDb(make5ResolvedPlus1Cancelled()));
+
+      // Leaderboard: walletC must appear (5 resolved markets ≥ minimum)
+      // walletD also appears (also has 5 resolved markets, but lost all)
+      const lbRes = await app.request('/leaderboard?chain=sonic');
+      expect(lbRes.status).toBe(200);
+      const lbBody = (await lbRes.json()) as any;
+      expect(lbBody.total).toBe(2); // walletC (rank 1) and walletD (rank 2)
+
+      const row = lbBody.rows[0];
+      expect(row.wallet).toBe(walletC.toLowerCase());
+      // resolved_markets must be 5, NOT 6
+      expect(row.resolved_markets).toBe(5);
+      // net_profit must NOT include the cancelled market stake/refund
+      // walletC won all 5 resolved markets: 5 × (20M pool − 10M stake) = +50M
+      expect(row.net_profit).toBe('50000000');
+
+      // /stats also must not count the cancelled market
+      const statsRes = await app.request(`/stats/${walletC}?chain=sonic`);
+      expect(statsRes.status).toBe(200);
+      const statsBody = (await statsRes.json()) as any;
+      expect(statsBody.resolved_markets).toBe(5);
+      expect(statsBody.wins).toBe(5);
+      expect(statsBody.rank).toBe(1);
+      expect(statsBody.markets_needed).toBe(0);
+    });
+  });
+
+  // ── 8. 60-second in-memory caching ──────────────────────────
   describe('In-memory Caching', () => {
     it('sets Cache-Control header and caches consecutive calls', async () => {
       let callCount = 0;

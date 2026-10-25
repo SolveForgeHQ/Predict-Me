@@ -91,6 +91,7 @@ export interface IndexerEnv {
   SONIC_RPC_URL?:       string;
   SONIC_CONTRACT_ADDRESS?: string;
   SONIC_START_BLOCK?:   string;   // fallback for first run
+  maxRanges?:           number;
 }
 
 interface DecodedRow {
@@ -298,7 +299,8 @@ export async function runSonicIndexer(env: IndexerEnv): Promise<IndexerResult> {
   let rangesProcessed   = 0;
   let currentFrom = fromBlock;
 
-  while (currentFrom <= safeLatest && rangesProcessed < MAX_RANGES_PER_RUN) {
+  const maxRanges = env.maxRanges ?? MAX_RANGES_PER_RUN;
+  while (currentFrom <= safeLatest && rangesProcessed < maxRanges) {
     const currentTo = Math.min(currentFrom + BLOCK_RANGE_SIZE - 1, safeLatest);
 
     // Fetch logs for this range

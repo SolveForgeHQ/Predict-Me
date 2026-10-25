@@ -78,7 +78,7 @@ export const AVALANCHE_EVENTS_ABI = [
 const BLOCK_RANGE_SIZE    = 100;   // Avalanche Fuji public RPC caps eth_getLogs at 100 blocks per request
 const BATCH_DELAY_MS      = 150;   // shorter delay — Avalanche RPC is more permissive
 const CONFIRMATION_BUFFER = 5;     // fewer confirmations needed on Avalanche
-const MAX_RANGES_PER_RUN  = 10;    // max 10 batches per run so it finishes in ~1-2 seconds without freezing
+const MAX_RANGES_PER_RUN  = 20;    // max 20 batches per run (2,000 blocks); ~26 subrequests out of 50 budget
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,6 +87,7 @@ export interface AvalancheIndexerEnv {
   AVALANCHE_RPC_URL?:        string;
   AVALANCHE_CONTRACT_ADDRESS?: string;
   AVALANCHE_START_BLOCK?:    string;
+  maxRanges?:                number;
 }
 
 interface DecodedRow {
@@ -288,7 +289,8 @@ export async function runAvalancheIndexer(env: AvalancheIndexerEnv): Promise<Ava
   let rangesProcessed   = 0;
   let currentFrom = fromBlock;
 
-  while (currentFrom <= safeLatest && rangesProcessed < MAX_RANGES_PER_RUN) {
+  const maxRanges = env.maxRanges ?? MAX_RANGES_PER_RUN;
+  while (currentFrom <= safeLatest && rangesProcessed < maxRanges) {
     const currentTo = Math.min(currentFrom + BLOCK_RANGE_SIZE - 1, safeLatest);
 
     let rawLogs: Awaited<ReturnType<typeof client.getLogs>>;
