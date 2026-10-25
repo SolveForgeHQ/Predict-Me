@@ -591,7 +591,7 @@ async function syncChainMarkets(
     }
   } else if (chain === 'avalanche') {
     const rpcUrl = c.env?.AVALANCHE_RPC_URL ?? 'https://api.avax-test.network/ext/bc/C/rpc';
-    const contractAddress = c.env?.AVALANCHE_CONTRACT_ADDRESS ?? '';
+    const contractAddress = c.env?.AVALANCHE_CONTRACT_ADDRESS ?? '0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa';
     try {
       if (contractAddress) {
         freshMarkets = await rpcBreakers.avalanche.call(() =>

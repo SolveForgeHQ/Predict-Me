@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_AVALANCHE_RPC_URL:
       process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL ?? "https://api.avax-test.network/ext/bc/C/rpc",
     NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS:
-      process.env.NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS ?? "0x0000000000000000000000000000000000000000",
+      process.env.NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS ?? "0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa",
 
     // Sonic Testnet (chain 14601) — commented out, not shown in UI
     // NEXT_PUBLIC_SONIC_RPC_URL: process.env.NEXT_PUBLIC_SONIC_RPC_URL ?? "https://rpc.testnet.soniclabs.com",

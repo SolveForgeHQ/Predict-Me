@@ -86,6 +86,7 @@ predict-me/
 │   ├── core/                # Shared Stellar & EVM contract clients
 │   └── types/               # Shared TypeScript schemas & interfaces
 └── docs/
+    ├── leaderboard.md       # Leaderboard architecture, ranking math & indexer
     ├── stellar.md           # Stellar testnet deployment & test guide
     ├── avalanche.md         # Avalanche testnet deployment guide
     └── sonic.md             # Sonic testnet deployment guide
@@ -129,4 +130,5 @@ claim_winnings(env, market_id: u32, caller: Address) -> i128
 
 - **Live on Stellar Testnet:** The Soroban smart contract is live and handles market creation, share purchasing, resolution, and winnings distribution.
 - **Pari-Mutuel Pool Model:** v1 operates a pooled pari-mutuel payout model.
+- **On-Chain Leaderboard:** Real-time event indexing on Sonic testnet tracking trader profit, win rates, and weekly seasons. See [`docs/leaderboard.md`](docs/leaderboard.md) for architecture, ranking math, and indexer setup.
 - **Open Contributor Issues:** Scoped GitHub issues are open for v2 features including AMM bonding curves, portfolio dashboard, decentralized oracles, and multi-outcome markets. See [`CONTRIBUTING.md`](CONTRIBUTING.md).

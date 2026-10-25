@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import markets from './routes/markets';
 import auth from './routes/auth';
 import usersRoute from './routes/users';
+import { leaderboardRouter, statsRouter } from './routes/leaderboard';
 import { runSonicIndexer } from './indexer/sonic';
 import { runAvalancheIndexer } from './indexer/avalanche';
 
@@ -87,6 +88,8 @@ app.get('/debug/events', async (c) => {
 app.route('/markets', markets);
 app.route('/auth', auth);
 app.route('/users', usersRoute);   // all /users/* require a valid session
+app.route('/leaderboard', leaderboardRouter);
+app.route('/stats', statsRouter);
 
 // ── Cron handler — Cloudflare Scheduled Worker ───────────────
 // Triggered every minute via the schedule in wrangler.toml.
@@ -128,4 +131,12 @@ const scheduled: ExportedHandlerScheduledHandler<EnvBindings> = async (_event, e
   }
 };
 
-export default { ...app, scheduled } as ExportedHandler<EnvBindings>;
+app.get('/__scheduled', async (c) => {
+  await scheduled({ cron: c.req.query('cron') ?? '* * * * *' } as any, c.env, {} as any);
+  return c.text('Ran scheduled event');
+});
+
+export default {
+  fetch: app.fetch,
+  scheduled,
+};

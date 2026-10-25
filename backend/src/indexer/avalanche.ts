@@ -75,9 +75,10 @@ export const AVALANCHE_EVENTS_ABI = [
 
 // ── Tuning ───────────────────────────────────────────────────────────────────
 
-const BLOCK_RANGE_SIZE    = 2_000; // Avalanche has faster blocks (~2s) and no getLogs size limit issues
+const BLOCK_RANGE_SIZE    = 100;   // Avalanche Fuji public RPC caps eth_getLogs at 100 blocks per request
 const BATCH_DELAY_MS      = 150;   // shorter delay — Avalanche RPC is more permissive
 const CONFIRMATION_BUFFER = 5;     // fewer confirmations needed on Avalanche
+const MAX_RANGES_PER_RUN  = 10;    // max 10 batches per run so it finishes in ~1-2 seconds without freezing
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -252,7 +253,7 @@ export interface AvalancheIndexerResult {
  */
 export async function runAvalancheIndexer(env: AvalancheIndexerEnv): Promise<AvalancheIndexerResult> {
   const rpcUrl          = env.AVALANCHE_RPC_URL          ?? 'https://api.avax-test.network/ext/bc/C/rpc';
-  const contractAddress = env.AVALANCHE_CONTRACT_ADDRESS ?? '';
+  const contractAddress = env.AVALANCHE_CONTRACT_ADDRESS ?? '0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa';
 
   if (!contractAddress || contractAddress === '0x0000000000000000000000000000000000000000') {
     console.warn('[avalanche-indexer] AVALANCHE_CONTRACT_ADDRESS not configured — skipping');
@@ -265,7 +266,7 @@ export async function runAvalancheIndexer(env: AvalancheIndexerEnv): Promise<Ava
   const safeLatest  = latestBlock - CONFIRMATION_BUFFER;
 
   const checkpoint   = await readCheckpoint(env.DB);
-  const startDefault = Number(env.AVALANCHE_START_BLOCK ?? '0');
+  const startDefault = Number(env.AVALANCHE_START_BLOCK ?? '59915671');
   const fromBlock    = checkpoint !== null ? checkpoint + 1 : startDefault;
 
   if (fromBlock > safeLatest) {
@@ -287,7 +288,7 @@ export async function runAvalancheIndexer(env: AvalancheIndexerEnv): Promise<Ava
   let rangesProcessed   = 0;
   let currentFrom = fromBlock;
 
-  while (currentFrom <= safeLatest) {
+  while (currentFrom <= safeLatest && rangesProcessed < MAX_RANGES_PER_RUN) {
     const currentTo = Math.min(currentFrom + BLOCK_RANGE_SIZE - 1, safeLatest);
 
     let rawLogs: Awaited<ReturnType<typeof client.getLogs>>;

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
 import "./globals.css";
 import TopBar from "@/components/TopBar";
 import BottomNav from "@/components/BottomNav";
@@ -9,10 +8,12 @@ import { ChainProvider } from "@/context/ChainContext";
 
 import RainbowWeb3Provider from "@/providers/RainbowWeb3Provider";
 
-const geist = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+// Geist is loaded via the system font stack at build time so the build
+// doesn't need network access to fonts.googleapis.com.
+// When Netlify/Vercel builds have internet access, swap back to:
+//   import { Geist } from "next/font/google";
+//   const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+// and add the className to <html>.
 
 export const metadata: Metadata = {
   title: "predict-me — Decentralised Prediction Markets",
@@ -25,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${geist.variable} h-full`}>
+    <html lang="en" className="h-full">
       <body
         className="min-h-full flex flex-col antialiased"
         style={{ backgroundColor: "#0B0E14", color: "#F2F4F7" }}

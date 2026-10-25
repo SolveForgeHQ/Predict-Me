@@ -145,7 +145,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const client = useMemo<PredictionMarketClient>(() => {
     if (chain === "avalanche") {
       const rpcUrl = process.env.NEXT_PUBLIC_AVALANCHE_RPC_URL ?? "https://api.avax-test.network/ext/bc/C/rpc";
-      const contractAddress = (process.env.NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS ?? "0x0000000000000000000000000000000000000000") as Address;
+      const contractAddress = (process.env.NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS ?? "0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa") as Address;
       const publicClient = createPublicClient({ chain: avalancheFuji, transport: http(rpcUrl) });
       let walletClient: any = wagmiWalletClient;
       if (!walletClient && typeof window !== "undefined" && (window as any).ethereum) {

@@ -82,6 +82,7 @@ export const SONIC_EVENTS_ABI = [
 const BLOCK_RANGE_SIZE    = 1_000; // blocks per getLogs request
 const BATCH_DELAY_MS      = 300;   // pause between consecutive requests
 const CONFIRMATION_BUFFER = 10;    // stay behind latest to avoid reorgs
+const MAX_RANGES_PER_RUN  = 5;     // cap batches so it doesn't take 50+ seconds
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -297,7 +298,7 @@ export async function runSonicIndexer(env: IndexerEnv): Promise<IndexerResult> {
   let rangesProcessed   = 0;
   let currentFrom = fromBlock;
 
-  while (currentFrom <= safeLatest) {
+  while (currentFrom <= safeLatest && rangesProcessed < MAX_RANGES_PER_RUN) {
     const currentTo = Math.min(currentFrom + BLOCK_RANGE_SIZE - 1, safeLatest);
 
     // Fetch logs for this range
