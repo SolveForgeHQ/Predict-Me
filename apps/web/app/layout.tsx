@@ -1,19 +1,18 @@
 import type { Metadata } from "next";
+import { Geist } from "next/font/google";
 import "./globals.css";
 import TopBar from "@/components/TopBar";
 import BottomNav from "@/components/BottomNav";
 import { WalletProvider } from "@/context/WalletContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { ChainProvider } from "@/context/ChainContext";
-
 import RainbowWeb3Provider from "@/providers/RainbowWeb3Provider";
 
-// Geist is loaded via the system font stack at build time so the build
-// doesn't need network access to fonts.googleapis.com.
-// When Netlify/Vercel builds have internet access, swap back to:
-//   import { Geist } from "next/font/google";
-//   const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-// and add the className to <html>.
+const geist = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "predict-me — Decentralised Prediction Markets",
@@ -26,7 +25,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="h-full">
+    <html lang="en" className={`${geist.variable} h-full`}>
       <body
         className="min-h-full flex flex-col antialiased"
         style={{ backgroundColor: "#0B0E14", color: "#F2F4F7" }}
@@ -36,7 +35,6 @@ export default function RootLayout({
             <WalletProvider>
               <ToastProvider>
                 <TopBar />
-                {/* pb-20 reserves space so content never hides behind the floating bottom nav */}
                 <main className="flex-1 pb-20">{children}</main>
                 <BottomNav />
               </ToastProvider>
