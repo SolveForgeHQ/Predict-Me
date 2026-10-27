@@ -1,167 +1,159 @@
 # predict-me Frontend — Architecture
 
-Architecture of the predict-me Next.js frontend. This document covers page structure, component responsibilities, the contract integration layer, and how data flows through the app.
+This document covers the Next.js 16 App Router frontend deployed at
+https://predict-me.netlify.app.
 
 ---
 
 ## Overview
 
-The frontend is a Next.js 16 App Router application. Pages are Server Components by default; interactive pieces are isolated into `"use client"` components. Currently all data is mocked in `lib/mockData.ts`. When the Soroban contract is deployed, `lib/contract.ts` stubs are replaced with real RPC calls and `lib/wallet.ts` stubs are replaced with Freighter signing logic.
+The app is a Next.js 16 App Router project. Pages are Server Components by default;
+interactive pieces (wallet, trading, admin) are `"use client"` components. Market data
+comes from the Cloudflare Workers backend (`predict-me-backend.0xchronosfi.workers.dev`),
+which caches contract state from Avalanche Fuji.
 
----
-
-## How It Connects to the Contract
-
-```
-Browser
-  │
-  ▼
-Next.js App (this repo)
-  ├── Server pages: read MOCK_MARKETS (later: fetchMarkets() via stellar-sdk)
-  └── Client components (BuyPanel, Admin)
-        │
-        ├── lib/contract.ts  ←  builds InvokeContractFunction XDR
-        │
-        └── lib/wallet.ts    ←  signs XDR via Freighter
-              │
-              ▼
-        @stellar/stellar-sdk
-        server.submitTransaction(signedXDR)
-              │
-              ▼
-        Soroban RPC  (NEXT_PUBLIC_SOROBAN_RPC_URL)
-              │
-              ▼
-        predict-me contract on Stellar Testnet
-```
+The active chain in the UI is **Avalanche Fuji**. Sonic Testnet code is wired up but the
+chain is hidden from the selector. Stellar code is preserved in the repository but removed
+from `ChainId` — it never renders.
 
 ---
 
 ## Source Layout
 
 ```
-frontend/
+apps/web/
 ├── app/
-│   ├── page.tsx               Homepage
-│   ├── market/[id]/
-│   │   ├── page.tsx           Market detail (server)
-│   │   └── TradePanel.tsx     Trade inputs (client)
-│   ├── admin/page.tsx         Admin panel (client)
-│   ├── layout.tsx             Root layout
-│   └── globals.css            CSS variables + dark theme
+│   ├── page.tsx                Homepage — server component, loads markets from backend
+│   ├── market/
+│   │   ├── page.tsx            Market browse — client component, chain-aware filter
+│   │   └── [id]/
+│   │       ├── page.tsx        Market detail — server component, live backend fetch
+│   │       └── TradePanel.tsx  Buy shares — client component
+│   ├── admin/page.tsx          Admin panel — create/resolve markets, owner-gated
+│   ├── leaderboard/page.tsx    Leaderboard (placeholder data, v2)
+│   ├── quests/page.tsx         Quests (placeholder data, v2)
+│   ├── layout.tsx              Root layout — Geist font, providers
+│   └── globals.css             CSS variables + dark theme
 │
 ├── components/
-│   ├── Navbar.tsx             [client] — floating glass pill, usePathname
-│   ├── MarketCard.tsx         [server] — CSS-only hover, no event handlers
-│   ├── MarketGrid.tsx         [server] — wraps MarketCard[], accepts Market[]
-│   ├── BuyPanel.tsx           [client] — YES/NO inputs, stub buy handlers
-│   ├── PositionCard.tsx       [client] — share balance display, mock zeros
-│   └── ConnectWalletButton.tsx [client] — wallet button, stub onClick
+│   ├── TopBar.tsx              Sticky glass pill header + wallet button
+│   ├── BottomNav.tsx           Floating bottom nav
+│   ├── MarketCard.tsx          Market grid card
+│   ├── PositionCard.tsx        On-chain position + claim winnings
+│   ├── PriceChart.tsx          Live odds chart (D1 snapshots)
+│   ├── StatusBanner.tsx        Pending / error / success / wrong-network banners
+│   └── ChainSwitcher.tsx       Chain dropdown (currently shows Avalanche only)
+│
+├── context/
+│   ├── ChainContext.tsx        Active chain + PredictionMarketClient instance
+│   ├── WalletContext.tsx       Wallet state (EVM via Wagmi/RainbowKit)
+│   └── ToastContext.tsx        Toast notification system
+│
+├── providers/
+│   └── RainbowWeb3Provider.tsx Wagmi + RainbowKit (Avalanche Fuji + Mainnet)
 │
 └── lib/
-    ├── types.ts               Market, Position, WalletState interfaces
-    ├── mockData.ts            MOCK_MARKETS[] static data
-    ├── markets.ts             formatPool(), timeRemaining() helpers
-    ├── contract.ts            Soroban RPC stubs
-    └── wallet.ts              Freighter connection stubs
+    ├── markets.ts              loadMarketsWithSource() — backend → fallback
+    ├── types.ts                Frontend Market, Position types
+    ├── api.ts                  apiFetch() — credentials:include for HttpOnly cookie
+    ├── auth.ts                 Post-connect JWT flow (Stellar only)
+    ├── errors.ts               Chain-aware transaction error formatter
+    ├── wallet.ts               StellarWalletsKit wrapper (preserved, not active in UI)
+    └── contract.ts             Soroban RPC helpers (preserved, not active in UI)
 ```
 
 ---
 
-## Pages
+## Chain Selection
 
-### `/` — Homepage (`app/page.tsx`)
+`ChainContext` defines the active chain and instantiates the correct client:
 
-Server component. Imports `MOCK_MARKETS` from `lib/mockData.ts`, renders a stats bar (market count, total volume) and a `<MarketGrid>` of `<MarketCard>` components. Static — no client state or hydration. When contract is live, replace `MOCK_MARKETS` with `await fetchMarkets()` from `lib/contract.ts`.
+```ts
+export type ChainId = "avalanche" | "stellar"; // "sonic" removed from UI
+export const SELECTABLE_CHAINS = ["avalanche"];
+export const DEFAULT_CHAIN = "avalanche";
+```
 
-### `/market/[id]` — Market Detail (`app/market/[id]/page.tsx`)
-
-Server component. Calls `getMockMarket(id)` — returns 404 if not found. `generateStaticParams` pre-renders all 6 mock ids. Renders: category label → large question heading → prominent YES/NO odds bar → two-column layout (left: chart placeholder + stats, right: sticky `<BuyPanel>` + `<PositionCard>`).
-
-`TradePanel.tsx` in this directory is an older inline version of the trade UI. The canonical component is `components/BuyPanel.tsx`.
-
-### `/admin` — Admin (`app/admin/page.tsx`)
-
-Client component. Holds all state in `useState` — no persistence. Create Market appends a new `Market` object to local state. Resolve YES/NO flips the `status` field. When contract is live, replace state mutations with `createMarket()` and `resolveMarket()` from `lib/contract.ts`.
+The `ChainSwitcher` component reads `SELECTABLE_CHAINS` — it shows only Avalanche.
+To re-enable Sonic, add `"sonic"` back to `SELECTABLE_CHAINS` and uncomment the
+`sonicTestnet` import in `RainbowWeb3Provider.tsx`.
 
 ---
 
-## Components
+## Market Data Flow
 
-| Component | Type | Responsibility |
-|---|---|---|
-| `Navbar` | client | Floating pill. Uses `usePathname` for active link highlight. `ConnectWalletButton` embedded. |
-| `MarketCard` | server | Single market card. Hover effect via inline `<style>` tag (no JS event handlers, stays server-safe). |
-| `MarketGrid` | server | Grid wrapper. Accepts `Market[]` prop — decoupled from data source. |
-| `BuyPanel` | client | YES/NO amount inputs. Computes estimated shares as `amount / (percent / 100)`. `handleBuyYes` / `handleBuyNo` are stubs. |
-| `PositionCard` | client | Shows `yesShares`, `noShares`, avg prices from a `Position` prop. Defaults to `EMPTY` (all zeros). |
-| `ConnectWalletButton` | client | Static button. `handleClick` logs a warning. Wire to `connectWallet()` in `lib/wallet.ts`. |
+```
+Browser
+  │
+  ├── Server page (page.tsx / market/[id]/page.tsx)
+  │     └── apiFetch("/markets?chain=avalanche")
+  │               │
+  │               ▼
+  │           Cloudflare Worker
+  │           GET /markets?chain=avalanche
+  │           → in-memory cache (30s) → viem readContract → D1
+  │
+  └── Client page (market/page.tsx — browse)
+        └── loadMarketsWithSource(chain)
+              1. apiFetch("/markets?chain=...") — backend
+              2. loadMarketsWithSource fallback — empty
+```
+
+The homepage uses `export const revalidate = 15` for ISR. The market detail page uses
+`dynamicParams = true` and `revalidate = 15` to serve live on-chain markets not
+in `generateStaticParams`.
 
 ---
 
-## Library Layer
+## Trade Flow
 
-### `lib/types.ts`
-Single source of truth for TypeScript interfaces. `Market` mirrors the contract's `MarketState`. `Position` mirrors the `Shares` storage entries. `WalletState` tracks the Freighter connection.
-
-### `lib/mockData.ts`
-`MOCK_MARKETS[]` — 6 hardcoded markets across Sports, Crypto, Finance, Tech categories. Also exports `getMockMarket(id)`. Replace usages with `fetchMarkets()` / `fetchMarket()` from `lib/contract.ts` once the contract is deployed.
-
-### `lib/contract.ts`
-All Soroban RPC call stubs. Each function logs a `console.warn` and returns `null`. Functions: `fetchMarkets`, `fetchMarket`, `fetchPosition`, `buyShares`, `createMarket`, `resolveMarket`, `claimWinnings`. Reads `NEXT_PUBLIC_MARKET_CONTRACT_ID` and `NEXT_PUBLIC_SOROBAN_RPC_URL` from env.
-
-### `lib/wallet.ts`
-Freighter connection stubs. Functions: `getWalletState`, `connectWallet`, `disconnectWallet`, `signTransaction`. Intended to wrap `@creit.tech/stellar-wallets-kit`. All log warnings and return `null`.
-
----
-
-## Data Flow
-
-**Current (mock):**
 ```
-app/page.tsx
-  → imports MOCK_MARKETS from lib/mockData.ts
-  → passes to <MarketGrid markets={MOCK_MARKETS} />
-  → renders <MarketCard> for each
-```
-
-**Target (with contract):**
-```
-app/page.tsx
-  → await fetchMarkets()  from lib/contract.ts
-      → StellarSdk.SorobanRpc.Server(RPC_URL)
-      → simulate invokeContractFunction(list_markets)
-      → parse XDR response → Market[]
-  → passes to <MarketGrid markets={markets} />
-```
-
-**Buy shares flow (target):**
-```
-User types amount in BuyPanel
-  → handleBuyYes() called
-  → buyShares(market.id, "YES", amount) in lib/contract.ts
-      → build InvokeContractFunction op
-      → simulate → get footprint
-      → signTransaction(xdr) in lib/wallet.ts
-          → kit.sign(xdr) via Freighter
-      → server.submitTransaction(signedXdr)
+User enters amount in TradePanel
+  → handleBuy()
+  → client.buyShares({ marketId, outcomeIndex, amount })
+      → AvalancheMarketClient.buyShares()
+          → walletClient.writeContract({ value: parseEther(amount) })
+          → MetaMask prompts user
+          → publicClient.waitForTransactionReceipt()
+  → window.dispatchEvent("predict-me:buy")   ← PositionCard auto-refreshes
 ```
 
 ---
 
-## Current Limitations
+## Admin Flow
+
+```
+/admin page loads
+  → loadMarketsWithSource(chain)  ← fetches live markets from backend
+  → lists markets with Resolve / Cancel buttons
+
+handleResolve(marketId, outcomeIndex)
+  → client.resolveMarket({ marketId, winningOutcomeIndex: outcomeIndex })
+      → AvalancheMarketClient.resolveMarket()
+          → resolveLocalOutcomeIndex checks winningOutcomeIndex first
+            (explicit !== undefined, not truthiness — index 0 is valid)
+```
+
+---
+
+## Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_BACKEND_URL` | Backend API URL (http://127.0.0.1:8787 locally, production worker URL on Netlify) |
+| `NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS` | `0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa` |
+| `NEXT_PUBLIC_AVALANCHE_RPC_URL` | `https://api.avax-test.network/ext/bc/C/rpc` |
+
+Sonic vars (`NEXT_PUBLIC_SONIC_*`) are commented out in `next.config.ts` and not required
+for the current UI. They are preserved in `.env.example` for when Sonic is re-enabled.
+
+---
+
+## Known Limitations
 
 | Limitation | Status |
 |---|---|
-| All data is mocked | `MOCK_MARKETS` in `lib/mockData.ts` |
-| Wallet connection is a stub | `lib/wallet.ts` logs and returns null |
-| Buy/Sell submits nothing | `BuyPanel` handlers are stubs |
-| Admin actions are local state only | No contract calls from `/admin` |
-| `TradePanel.tsx` is a duplicate | `BuyPanel.tsx` is the canonical component |
-| No React context for wallet state | `WalletState` not shared across components |
-
----
-
-## Related Repos
-
-- **Contracts:** [predict-me-contracts](https://github.com/SolveForgeHQ/predict-me-contracts)
+| Leaderboard shows placeholder data | Real rankings from `chain_events` planned for v2 |
+| Quests are static | Tracking system planned for v2 |
+| Price chart only populates after trades | Requires backend to be running to record snapshots |
+| Stellar wallet integration present but inactive | `lib/wallet.ts` and `lib/auth.ts` preserved for re-enable |

@@ -1,8 +1,20 @@
 # Avalanche Fuji — Prediction Market Deployment Guide
 
-This is the complete guide to deploying the `PredictionMarket.sol` contract to the Avalanche
-Fuji testnet, running the test suite locally, and wiring the deployed address into the frontend
-and backend.
+This is the complete guide to the `PredictionMarket.sol` contract deployed on
+Avalanche Fuji, running the test suite, and wiring the address into the app.
+
+---
+
+## Deployed Contract
+
+| Field | Value |
+|---|---|
+| **Contract Address** | `0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa` |
+| **Owner** | `0x376cBCdec2cEC23092363DD04031FBf091B450E9` |
+| **Min Stake** | 0.01 AVAX (1e16 wei) |
+| **Grace Period** | 7 days (604800 seconds) |
+| **Block** | 59915671 |
+| **Explorer** | https://testnet.snowtrace.io/address/0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa |
 
 ---
 
@@ -19,10 +31,8 @@ and backend.
 9. [Step 5 — Deploy to Fuji](#step-5--deploy-to-fuji)
 10. [Step 6 — Wire the Contract Address](#step-6--wire-the-contract-address)
 11. [Step 7 — Verify on Snowtrace (Optional)](#step-7--verify-on-snowtrace-optional)
-12. [Step 8 — Create Your First Market](#step-8--create-your-first-market)
-13. [Frontend Integration Reference](#frontend-integration-reference)
-14. [Error Reference](#error-reference)
-15. [Troubleshooting](#troubleshooting)
+12. [Frontend Integration Reference](#frontend-integration-reference)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -30,23 +40,27 @@ and backend.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Next.js Frontend (apps/web)                                    │
-│  ┌──────────────┐  ┌───────────────────┐  ┌─────────────────┐  │
-│  │ ChainContext  │  │  WalletContext     │  │ Avalanche       │  │
-│  │ chain=       │  │  evmAddress        │  │ MarketClient    │  │
-│  │ "avalanche"  │  │  isWrongNetwork    │  │ (viem)          │  │
-│  └──────┬───────┘  └────────┬──────────┘  └────────┬────────┘  │
-│         └───────────────────┴────────────────────── ┘           │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ JSON-RPC (viem WalletClient)
-                                 ▼
+│  Next.js Frontend (apps/web) — Netlify                          │
+│  ┌──────────────┐  ┌────────────────┐  ┌─────────────────────┐  │
+│  │ ChainContext  │  │ WalletContext   │  │ AvalancheMarketClient│  │
+│  │ chain=       │  │ evmAddress      │  │ (viem)              │  │
+│  │ "avalanche"  │  │ isWrongNetwork  │  │                     │  │
+│  └──────┬───────┘  └───────┬────────┘  └──────────┬──────────┘  │
+└─────────┼──────────────────┼─────────────────────┼─────────────┘
+          └──────────────────┴─────────────────────┘
+                             │ JSON-RPC (viem)
+                             ▼
+┌────────────────────────────────────────────────────────────────┐
+│  Cloudflare Workers Backend — predict-me-backend.workers.dev   │
+│  GET /markets?chain=avalanche  (30s cache, D1 persistence)      │
+└───────────────────────────────┬────────────────────────────────┘
+                                │ viem readContract
+                                ▼
 ┌────────────────────────────────────────────────────────────────┐
 │  Avalanche Fuji C-Chain  (Chain ID 43113)                      │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  PredictionMarket.sol                                    │  │
-│  │  createMarket  buyShares(payable)  resolveMarket(owner)  │  │
-│  │  claimWinnings  getMarket  getPosition  getPoolTotals    │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  PredictionMarket @ 0xb3827768d1db46eA92303f29fe1DF2eB497Eb4fa │
+│  createMarket  buyShares(payable)  resolveMarket(owner)         │
+│  cancelMarket  cancelUnresolved  claimWinnings  refund          │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -56,20 +70,24 @@ and backend.
 
 **Source:** `blockchain/avalanche/contracts/src/PredictionMarket.sol`
 
-Inherits `Ownable` and `ReentrancyGuard` from OpenZeppelin. The deployer wallet becomes the
-owner and is the only address that can call `createMarket` and `resolveMarket`.
+Inherits `Ownable2Step` and `ReentrancyGuard` from OpenZeppelin. The owner (set at deploy
+time via constructor) is the only address that can call `createMarket` and `resolveMarket`.
+The deployer and owner may be different keys.
 
 ### Market Struct
 
 ```solidity
 struct Market {
     string question;
-    uint256 endTime;      // Unix timestamp — trading closes at this point
-    MarketStatus status;  // Open | Resolved
-    bool outcome;         // true = YES won, false = NO won (set on resolution)
-    uint256 yesPool;      // total AVAX deposited on YES (in wei)
-    uint256 noPool;       // total AVAX deposited on NO  (in wei)
-    uint256 totalPool;    // yesPool + noPool
+    string resolutionCriteria;   // emitted for auditability
+    uint64 closeTime;            // Unix timestamp — trading and resolution gate
+    MarketStatus status;         // Open | Resolved | Cancelled
+    uint256 winningOutcome;      // outcome index, valid only when Resolved
+    string[] outcomeLabels;      // N >= 2 outcome labels
+    uint256[] pools;             // per-outcome pool amounts in wei
+    uint256 totalPool;           // sum of all pools
+    uint256 remainingPool;       // used for dust-free last-claimer payout
+    uint256 remainingWinningShares;
 }
 ```
 
@@ -77,60 +95,57 @@ struct Market {
 
 | Function | Access | Description |
 |---|---|---|
-| `createMarket(question, endTime)` | `onlyOwner` | Creates a new binary market, returns `marketId` |
-| `buyShares(marketId, isYes) payable` | anyone | Buy YES/NO shares by sending AVAX with the call |
-| `resolveMarket(marketId, outcome)` | `onlyOwner` | Resolves market to YES (`true`) or NO (`false`) |
-| `claimWinnings(marketId)` | anyone | Pays out winning shares proportionally; zeroes balance before transfer |
+| `createMarket(question, outcomes[], closeTime, resolutionCriteria)` | `onlyOwner` | Creates a multi-outcome market |
+| `buyShares(marketId, outcomeIndex) payable` | anyone | Buy shares by sending AVAX — must be ≥ `minStake` |
+| `resolveMarket(marketId, winningIndex)` | `onlyOwner`, after `closeTime` | Resolves market; auto-cancels if winning pool is zero |
+| `cancelMarket(marketId)` | `onlyOwner` | Cancels an open market; stakers can refund |
+| `cancelUnresolved(marketId)` | anyone | Cancels if `closeTime + gracePeriod` has passed |
+| `claimWinnings(marketId)` | anyone | Dust-free pro-rata payout for winning side |
+| `refund(marketId)` | anyone | Returns stake from a cancelled market |
 | `getMarket(marketId)` | view | Returns full `Market` struct |
-| `getPosition(marketId, user)` | view | Returns `(yesBalance, noBalance)` in wei |
-| `getPoolTotals(marketId)` | view | Returns `(yesPool, noPool, totalPool)` in wei |
+| `getOutcomes(marketId)` | view | Returns outcome labels array |
+| `getPools(marketId)` | view | Returns `(pools[], totalPool)` |
+| `getPosition(marketId, user)` | view | Returns per-outcome share balances |
 
 ### Events
 
-| Event | Emitted By |
+| Event | Fields |
 |---|---|
-| `MarketCreated(marketId, question, endTime)` | `createMarket` |
-| `SharesBought(marketId, buyer, isYes, amount)` | `buyShares` |
-| `MarketResolved(marketId, outcome)` | `resolveMarket` |
-| `WinningsClaimed(marketId, claimer, payout)` | `claimWinnings` |
+| `MarketCreated` | `marketId`, `question`, `outcomes[]`, `closeTime`, `resolutionCriteria` |
+| `SharesBought` | `marketId`, `buyer`, `outcomeIndex`, `amount` |
+| `MarketResolved` | `marketId`, `winningOutcome` |
+| `MarketCancelled` | `marketId` |
+| `WinningsClaimed` | `marketId`, `claimer`, `payout` |
+| `Refunded` | `marketId`, `user`, `amount` |
 
-### Custom Errors
+### Constructor Parameters
 
-| Error | Thrown When |
+```solidity
+constructor(address initialOwner, uint256 minStake, uint256 resolutionGracePeriod)
+```
+
+| Parameter | Deployed Value |
 |---|---|
-| `EmptyQuestion` | `question` is an empty string |
-| `InvalidEndTime` | `endTime` is in the past |
-| `MarketNotFound` | `marketId` is 0 or greater than `marketCount` |
-| `MarketNotOpen` | Buying/resolving on a non-Open market |
-| `MarketExpired` | Buying after `endTime` |
-| `MarketNotResolved` | Claiming on an unresolved market |
-| `ZeroDeposit` | `msg.value == 0` when buying shares |
-| `NoWinningShares` | Claimer holds no winning shares (or already claimed) |
-| `TransferFailed` | Native AVAX transfer to winner failed |
+| `initialOwner` | `0x376cBCdec2cEC23092363DD04031FBf091B450E9` |
+| `minStake` | `10000000000000000` (0.01 AVAX) |
+| `resolutionGracePeriod` | `604800` (7 days) |
 
 ---
 
 ## Payout Formula
 
 ```
-payout = (userWinningShares × totalPool) / winningPool
+payout = (userShares × remainingPool) / remainingWinningShares
 ```
 
-Shares are 1:1 with AVAX in wei — sending 1 AVAX gives you 1e18 shares.
-
-**Example — Single winner:**
-- Alice: 40 AVAX YES, Bob: 60 AVAX NO → YES wins
-- `totalPool = 100 AVAX`, `yesPool = 40 AVAX`
-- Alice payout: `(40 × 100) / 40 = 100 AVAX` (+60 profit)
+`remainingPool` and `remainingWinningShares` decrease after each claim so the last
+claimer receives the exact remainder — no dust stranded in the contract.
 
 **Example — Two winners:**
 - Alice: 20 AVAX YES, Carol: 60 AVAX YES, Bob: 120 AVAX NO → YES wins
 - `totalPool = 200 AVAX`, `yesPool = 80 AVAX`
-- Alice payout: `(20 × 200) / 80 = 50 AVAX` (+30 profit)
-- Carol payout: `(60 × 200) / 80 = 150 AVAX` (+90 profit)
-
-> Solidity integer division truncates remainders. Any dust (≤ 1 wei per claimer) stays in the
-> contract.
+- Alice claims first: `(20 × 200) / 80 = 50 AVAX`
+- Carol claims next: `(60 × 150) / 60 = 150 AVAX` (exact remainder, zero dust)
 
 ---
 
@@ -149,69 +164,35 @@ Shares are 1:1 with AVAX in wei — sending 1 AVAX gives you 1e18 shares.
 
 ## Step 1 — Install Prerequisites
 
-### 1a. Install Foundry
+### Install Foundry
 
-Foundry provides `forge` (build/test/deploy) and `cast` (contract calls).
-
-**Windows (PowerShell):**
-```powershell
-irm https://foundry.paradigm.xyz | iex
-```
-
-This installs to `$env:USERPROFILE\.foundry\bin`. Either add that folder to your PATH, or
-prefix every command below with the full path:
-
-```powershell
-# Check it works
-& "$env:USERPROFILE\.foundry\bin\forge.exe" --version
-# forge 0.x.x (...)
+**Windows (Git Bash):**
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+~/.foundry/bin/foundryup
+forge --version
 ```
 
 **macOS / Linux:**
 ```bash
 curl -L https://foundry.paradigm.xyz | bash
 foundryup
-forge --version
 ```
 
-### 1b. Get a Fuji Wallet and Test AVAX
+### Get Fuji Test AVAX
 
-1. Open MetaMask (or any EVM wallet) and add the Fuji network:
-   - RPC: `https://api.avax-test.network/ext/bc/C/rpc`
-   - Chain ID: `43113`
-   - Currency: `AVAX`
-2. Copy your wallet address.
-3. Go to https://faucet.avax.network, select **Fuji**, and request test AVAX.
-4. Wait ~30 seconds — you need at least **0.5 AVAX** to cover deployment gas.
-
-> ⚠️ **Never use a mainnet private key for testnet deployment.**  
-> Create a dedicated throwaway wallet for Fuji deployments.
+1. Add the Fuji network to MetaMask (RPC above, Chain ID 43113)
+2. Go to https://faucet.avax.network, select **Fuji**, request AVAX
+3. You need at least **0.5 AVAX** to cover deployment gas
 
 ---
 
 ## Step 2 — Initialize Git Submodules
 
-The Avalanche contracts share the `lib/` folder (OpenZeppelin, forge-std) with the Stellar
-contracts via a relative path in `foundry.toml`. Both submodules must be present before
-`forge` can build.
+The Avalanche contracts share the `lib/` folder with the Stellar contracts.
 
 ```bash
-# From the repo root
 git submodule update --init --recursive
-```
-
-Expected output:
-```
-Submodule 'blockchain/stellar/contracts/lib/forge-std' (...) registered
-Submodule 'blockchain/stellar/contracts/lib/openzeppelin-contracts' (...) registered
-Cloning into '...'
-```
-
-If you cloned with `--recurse-submodules` already, you can skip this step. Verify with:
-
-```bash
-ls blockchain/stellar/contracts/lib/
-# forge-std   openzeppelin-contracts
 ```
 
 ---
@@ -222,135 +203,52 @@ ls blockchain/stellar/contracts/lib/
 cp blockchain/avalanche/contracts/.env.example blockchain/avalanche/contracts/.env
 ```
 
-Open `blockchain/avalanche/contracts/.env` and fill in:
+Fill in `blockchain/avalanche/contracts/.env`:
 
 ```env
-# Your deployer wallet private key — WITHOUT the 0x prefix
-PRIVATE_KEY=abc123...your64hexchars
+# Deployer private key (with or without 0x prefix)
+PRIVATE_KEY=your_private_key_here
 
-# Fuji RPC (the default works, no API key needed)
+# Optional: owner wallet — defaults to deployer if not set
+OWNER_ADDRESS=
+
+# Optional: min stake in wei (default: 1e16 = 0.01 AVAX)
+MIN_STAKE=
+
+# Optional: grace period in seconds (default: 604800 = 7 days)
+GRACE_PERIOD=
+
 FUJI_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc
-
-# Optional — only needed for Step 7 (contract verification on Snowtrace)
 SNOWTRACE_API_KEY=
 ```
 
-> ⚠️ The `.env` file is listed in `.gitignore`. Never commit it.  
-> Your private key gives full control of your deployer wallet.
+> ⚠️ Never commit `.env`. It is gitignored.
 
 ---
 
 ## Step 4 — Run Tests Locally
 
-Always run the test suite before deploying to confirm the contract behaves correctly.
-
-**Navigate to the contracts directory:**
 ```bash
 cd blockchain/avalanche/contracts
+forge test -vv
 ```
 
-**Run all tests:**
-
-Windows PowerShell:
-```powershell
-& "$env:USERPROFILE\.foundry\bin\forge.exe" test
-```
-
-macOS / Linux:
-```bash
-forge test
-```
-
-**Run with full execution traces:**
-```bash
-forge test -vvv
-```
-
-**Run a specific test:**
-```bash
-forge test --match-test test_Integration_FullFlow_MultiWinner_ProportionalSplit -vvv
-```
-
-### Test Files
-
-| File | Coverage |
-|---|---|
-| `test/PredictionMarket.t.sol` | Unit tests — individual functions, access control, revert cases |
-| `test/PredictionMarketIntegration.t.sol` | Integration tests — full market lifecycle scenarios |
-
-### Expected Output
-
-```
-Running 20 tests for test/PredictionMarket.t.sol:PredictionMarketTest
-[PASS] test_BuyShares_EmitsEvent() ...
-[PASS] test_BuyShares_NoShares_UpdatesBalance() ...
-[PASS] test_BuyShares_RevertsWhenExpired() ...
-[PASS] test_BuyShares_YesShares_UpdatesBalance() ...
-[PASS] test_ClaimWinnings_RevertsIfNoShares() ...
-...
-
-Running 6 tests for test/PredictionMarketIntegration.t.sol:PredictionMarketIntegrationTest
-[PASS] test_Integration_CannotBuyAfterExpiration() ...
-[PASS] test_Integration_CannotClaimBeforeResolution() ...
-[PASS] test_Integration_FullFlow_MultiWinner_ProportionalSplit() ...
-[PASS] test_Integration_FullFlow_SingleWinner_NO() ...
-[PASS] test_Integration_FullFlow_SingleWinner_YES() ...
-[PASS] test_Integration_NonOwnerCannotResolve() ...
-
-Test result: ok. 26 passed; 0 failed; 0 skipped
-```
-
-> **Note:** `via_ir = true` is set in `foundry.toml`. This enables the IR-based compiler
-> pipeline, which handles functions with many local variables. Compilation takes ~30–60 seconds
-> — this is expected.
+Expected: **43 passed; 0 failed** (34 unit + 9 integration tests).
 
 ---
 
 ## Step 5 — Deploy to Fuji
 
-Make sure you are in the contracts directory:
 ```bash
 cd blockchain/avalanche/contracts
-```
-
-### Dry Run (no broadcast — free, no gas)
-
-Run this first to confirm everything resolves correctly before spending real (test) AVAX:
-
-**Windows:**
-```powershell
-$env:PRIVATE_KEY = "your_private_key_here"
-& "$env:USERPROFILE\.foundry\bin\forge.exe" script script/DeployPredictionMarket.s.sol:DeployPredictionMarket `
-  --rpc-url https://api.avax-test.network/ext/bc/C/rpc `
-  -vvvv
-```
-
-**macOS / Linux:**
-```bash
 source .env
+
+# Dry run (free)
 forge script script/DeployPredictionMarket.s.sol:DeployPredictionMarket \
   --rpc-url $FUJI_RPC_URL \
   -vvvv
-```
 
-You should see the deployer address, its AVAX balance, and the chain ID printed — but no
-transaction is broadcast.
-
-### Live Deploy (broadcast — spends test AVAX)
-
-**Windows:**
-```powershell
-$env:PRIVATE_KEY = "your_private_key_here"
-& "$env:USERPROFILE\.foundry\bin\forge.exe" script script/DeployPredictionMarket.s.sol:DeployPredictionMarket `
-  --rpc-url https://api.avax-test.network/ext/bc/C/rpc `
-  --private-key $env:PRIVATE_KEY `
-  --broadcast `
-  -vvvv
-```
-
-**macOS / Linux:**
-```bash
-source .env
+# Live deploy
 forge script script/DeployPredictionMarket.s.sol:DeployPredictionMarket \
   --rpc-url $FUJI_RPC_URL \
   --private-key $PRIVATE_KEY \
@@ -358,245 +256,87 @@ forge script script/DeployPredictionMarket.s.sol:DeployPredictionMarket \
   -vvvv
 ```
 
-### Expected Output
-
-```
-==================================================
-Deploying PredictionMarket to Avalanche Fuji Testnet
-Deployer Address: 0xYourDeployerAddress
-Deployer Balance: 500000000000000000
-Chain ID:         43113
-==================================================
-
-## Setting up (1) EVMs.
-...
-
-==================================================
- Deployment Successful!
-==================================================
-Contract Address: 0xABCDEF1234567890abcdef1234567890ABCDEF12
-Contract Owner:   0xYourDeployerAddress
-==================================================
-```
-
-**Copy the `Contract Address` — you'll need it in the next step.**
-
-You can confirm the deployment on the block explorer:
-`https://testnet.snowtrace.io/address/0xYourContractAddress`
+The script prints the contract address, owner, min stake, and grace period.
 
 ---
 
 ## Step 6 — Wire the Contract Address
 
-You need to update three places with the deployed address.
-
-### 6a. Frontend `.env.local`
-
-Create or edit `apps/web/.env.local`:
+### `apps/web/.env.local`
 
 ```env
 NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS=0xYourContractAddress
 NEXT_PUBLIC_AVALANCHE_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc
+NEXT_PUBLIC_BACKEND_URL=https://predict-me-backend.0xchronosfi.workers.dev
 ```
 
-### 6b. Backend `wrangler.toml`
-
-Edit `backend/wrangler.toml`, under `[vars]`:
+### `backend/wrangler.toml` under `[vars]`
 
 ```toml
-[vars]
 AVALANCHE_CONTRACT_ADDRESS = "0xYourContractAddress"
 AVALANCHE_RPC_URL = "https://api.avax-test.network/ext/bc/C/rpc"
 ```
 
-### 6c. Restart Both Dev Servers
-
-The frontend reads env vars at build time, so a restart is required:
+Then redeploy the backend:
 
 ```bash
-# Terminal 1 — frontend
-pnpm dev:web
-
-# Terminal 2 — backend
-pnpm dev:backend
+cd backend
+npx wrangler deploy
 ```
-
-To verify the frontend picked up the address, open the app, switch to Avalanche in the chain
-switcher, and open the browser console — any contract call will show the address it's
-targeting.
 
 ---
 
 ## Step 7 — Verify on Snowtrace (Optional)
 
-Verifying publishes your source code to Snowtrace so anyone can read the contract, and
-enables the "Read/Write Contract" UI on the explorer page.
-
-Get a free API key at https://snowtrace.io/myapikey (sign up required).
-
-**Windows:**
-```powershell
-& "$env:USERPROFILE\.foundry\bin\forge.exe" verify-contract 0xYourContractAddress PredictionMarket `
-  --chain-id 43113 `
-  --etherscan-api-key $env:SNOWTRACE_API_KEY `
-  --compiler-version 0.8.20
-```
-
-**macOS / Linux:**
 ```bash
 forge verify-contract 0xYourContractAddress PredictionMarket \
   --chain-id 43113 \
-  --etherscan-api-key $SNOWTRACE_API_KEY \
-  --compiler-version 0.8.20
+  --etherscan-api-key $SNOWTRACE_API_KEY
 ```
-
-After a minute or two, visit your contract page on Snowtrace and the **Contract** tab should
-show a green checkmark and the verified source.
-
----
-
-## Step 8 — Create Your First Market
-
-Once deployed, use `cast` to create a market directly from the command line to confirm
-everything is working end-to-end.
-
-**Compute an `endTime`** (Unix timestamp 7 days from now):
-
-```bash
-# macOS / Linux
-date -d "+7 days" +%s
-
-# Windows PowerShell
-[int][double]::Parse((Get-Date).AddDays(7).ToString("yyyyMMddHHmmss") | ForEach-Object { (Get-Date -Date (Get-Date) -UFormat %s) }) 
-# Easier: just use an online Unix timestamp calculator and add 604800 (7 days in seconds)
-```
-
-**Call `createMarket`:**
-
-```bash
-cast send 0xYourContractAddress \
-  "createMarket(string,uint256)" \
-  "Will AVAX reach $100 by end of 2027?" \
-  1798761600 \
-  --rpc-url https://api.avax-test.network/ext/bc/C/rpc \
-  --private-key $PRIVATE_KEY
-```
-
-**Verify the market was created:**
-
-```bash
-cast call 0xYourContractAddress \
-  "getMarket(uint256)" 1 \
-  --rpc-url https://api.avax-test.network/ext/bc/C/rpc
-```
-
-You can also create markets from the `/admin` page in the frontend once both the contract
-address and your wallet (as the owner) are wired in.
 
 ---
 
 ## Frontend Integration Reference
 
-The frontend connects to the contract via `AvalancheMarketClient` in
-`packages/core/src/avalanche.ts`, instantiated inside `ChainContext` when
-`chain === "avalanche"`.
-
-### Switching to Avalanche
-
-Users toggle chains via the **ChainSwitcher** in the top bar. When Avalanche is active:
-- Transactions are signed via RainbowKit / Wagmi (MetaMask, Core, Coinbase, WalletConnect)
-- The app auto-detects wrong network (`chainId !== 43113`) and surfaces a **Switch Network** banner
-- All market reads go through `publicClient.readContract()` (no wallet needed)
-- All market writes go through `walletClient.writeContract()` (wallet required)
-
-### Key Context Hooks
+The frontend uses `AvalancheMarketClient` from `packages/core/src/avalanche.ts`.
 
 ```tsx
 import { useChain } from "@/context/ChainContext";
-import { useWallet } from "@/context/WalletContext";
-
 const { chain, chainMetadata, client } = useChain();
-// client is an AvalancheMarketClient when chain === "avalanche"
-
-const { evmAddress, isWrongNetwork, switchNetwork } = useWallet();
+// client is AvalancheMarketClient when chain === "avalanche"
 ```
 
-### Chain Metadata
-
-```tsx
-// chainMetadata when chain === "avalanche":
-{
-  id: "avalanche",
-  name: "Avalanche Fuji",
-  shortName: "Avalanche",
-  currency: "AVAX",
-  color: "#E84142",
-}
-```
-
----
-
-## Error Reference
-
-| Scenario | User-Facing Message |
-|---|---|
-| Wallet on wrong EVM network | "Wrong network — please switch to Avalanche Fuji Testnet" |
-| Insufficient AVAX for gas | "Insufficient AVAX balance to cover this transaction and gas fees" |
-| Transaction rejected in wallet | "Transaction rejected — please approve the transaction in your wallet" |
-| `MarketNotOpen` revert | "Market is not open for trading" |
-| `MarketExpired` revert | "Market trading period has ended" |
-| `MarketNotResolved` revert | "Market has not been resolved yet" |
-| `NoWinningShares` revert | "No winning shares to claim for this market" |
-| Contract address not set | "Avalanche contract address is not configured. Please set NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS in .env.local" |
-
-All Avalanche transaction errors flow through `parseTransactionError` in
-`apps/web/lib/errors.ts`, which normalises viem errors, MetaMask rejections, and raw revert
-strings into a consistent user-readable message.
+The chain switcher is currently set to **Avalanche only**. The backend `GET /markets?chain=avalanche`
+feeds the market list. The Cloudflare Cron Trigger indexes events from the contract every minute
+into `chain_events` for the leaderboard.
 
 ---
 
 ## Troubleshooting
 
-### `forge: command not found`
+### `forge: command not found` (Windows)
 
-Foundry was installed but not added to PATH. Use the full path on Windows:
-```powershell
-& "$env:USERPROFILE\.foundry\bin\forge.exe" <command>
-```
-Or add `$env:USERPROFILE\.foundry\bin` to your system PATH permanently.
+Use full path: `~/.foundry/bin/forge` or add `~/.foundry/bin` to PATH.
 
-### `Library not found` / `File not found` during build
+### Submodules missing
 
-Submodules are missing. Run:
 ```bash
 git submodule update --init --recursive
 ```
 
-### `Error: No wallet to mine with`
+### Markets not showing in frontend
 
-The `--private-key` flag was omitted from the broadcast command, or the env var is not set.
-Double-check `$env:PRIVATE_KEY` is populated in your terminal session.
+1. Check `NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS` in `.env.local`
+2. Restart `pnpm dev:web` (env vars baked at startup)
+3. Check `http://127.0.0.1:8787/markets?chain=avalanche` directly
+4. The backend has a 30-second cache — wait one cycle
 
-### `Error: insufficient funds`
+### `ResolutionTooEarly` on resolve
 
-Your deployer wallet has less AVAX than required for gas. Request more from
-https://faucet.avax.network — deployment costs roughly 0.01–0.05 AVAX in gas.
+The contract enforces `block.timestamp >= closeTime`. You must wait until the market's
+close time has passed before resolving.
 
-### `InvalidEndTime` on `createMarket`
+### `GracePeriodNotExpired` on cancelUnresolved
 
-The `endTime` you passed is less than or equal to the current block timestamp. Make sure you
-are passing a future Unix timestamp (seconds, not milliseconds).
-
-### Contract deployed but frontend shows no markets
-
-1. Confirm `NEXT_PUBLIC_AVALANCHE_CONTRACT_ADDRESS` is set correctly in `apps/web/.env.local`
-2. Restart the Next.js dev server — env vars are baked in at startup
-3. Confirm you are on the **Avalanche** chain in the chain switcher
-4. Check the browser console for any RPC errors
-
-### Backend still returning old/no markets
-
-1. Update `AVALANCHE_CONTRACT_ADDRESS` in `backend/wrangler.toml`
-2. Restart `pnpm dev:backend`
-3. The backend has a 30-second in-memory cache — wait one cache cycle or call
-   `GET /markets?chain=avalanche` directly to confirm
+`cancelUnresolved` is only callable after `closeTime + resolutionGracePeriod` (7 days by
+default). If the owner is available, use `cancelMarket` instead.
