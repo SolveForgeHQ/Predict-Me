@@ -3,9 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
   "dependencies": {
     "@predict-me/types": "workspace:*",
     "@stellar/stellar-sdk": "^16.2.0",
     "viem": "^2.23.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
   }
 }

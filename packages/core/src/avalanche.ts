@@ -122,8 +122,12 @@ export class AvalancheMarketClient implements PredictionMarketClient {
 
   private resolveLocalOutcomeIndex(params: {
     outcomeIndex?: number;
+    winningOutcomeIndex?: number;
     outcome?: string | number;
   }): number | null {
+    // Check winningOutcomeIndex first (used by resolveMarket)
+    if (params.winningOutcomeIndex !== undefined) return params.winningOutcomeIndex;
+    // Then outcomeIndex (used by buyShares)
     if (params.outcomeIndex !== undefined) return params.outcomeIndex;
     const o = params.outcome;
     if (typeof o === "number" && Number.isInteger(o) && o >= 0) return o;
@@ -138,7 +142,7 @@ export class AvalancheMarketClient implements PredictionMarketClient {
   }
 
   private async resolveOutcomeIndex(
-    params: { outcomeIndex?: number; outcome?: string | number },
+    params: { outcomeIndex?: number; winningOutcomeIndex?: number; outcome?: string | number },
     marketId: string,
   ): Promise<number> {
     const fast = this.resolveLocalOutcomeIndex(params);
