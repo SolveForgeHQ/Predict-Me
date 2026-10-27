@@ -4,6 +4,7 @@ import markets from './routes/markets';
 import auth from './routes/auth';
 import usersRoute from './routes/users';
 import { leaderboardRouter, statsRouter } from './routes/leaderboard';
+import { profileRouter } from './routes/profile';
 import { runSonicIndexer } from './indexer/sonic';
 import { runAvalancheIndexer } from './indexer/avalanche';
 
@@ -91,6 +92,7 @@ app.route('/auth', auth);
 app.route('/users', usersRoute);   // all /users/* require a valid session
 app.route('/leaderboard', leaderboardRouter);
 app.route('/stats', statsRouter);
+app.route('/profile', profileRouter);
 
 // ── Cron handler — Cloudflare Scheduled Worker ───────────────
 // Triggered every minute via the schedule in wrangler.toml.

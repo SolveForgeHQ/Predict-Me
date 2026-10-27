@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { Trophy, Medal, ExternalLink, RefreshCw, Info } from "lucide-react";
 import { useChain } from "@/context/ChainContext";
 import { useWallet } from "@/context/WalletContext";
@@ -95,20 +96,22 @@ function LeaderRow({
 
       {/* Wallet + stats */}
       <div className="flex-1 min-w-0">
-        <a
-          href={link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 group w-fit"
-        >
-          <span
-            className="text-sm font-semibold truncate group-hover:underline"
+        <div className="flex items-center gap-1 group w-fit">
+          <Link
+            href={`/profile/${row.wallet}`}
+            className="text-sm font-semibold truncate hover:underline"
             style={{ color: isMe ? "#00D084" : "#F2F4F7" }}
           >
             {truncateWallet(row.wallet)}
-          </span>
-          <ExternalLink size={11} style={{ color: "#8B93A7", flexShrink: 0 }} />
-        </a>
+          </Link>
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink size={11} style={{ color: "#8B93A7", flexShrink: 0 }} />
+          </a>
+        </div>
         <p className="text-xs mt-0.5" style={{ color: "#8B93A7" }}>
           {formatWinRate(row.win_rate)} wins · {row.resolved_markets} markets
         </p>

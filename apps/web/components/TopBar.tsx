@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { truncateAddress } from "@/lib/wallet";
-import { LogOut, Copy, Check, Loader2, ExternalLink, Shield } from "lucide-react";
+import { LogOut, Copy, Check, Loader2, ExternalLink, Shield, User } from "lucide-react";
 import { useChain, CHAIN_METADATA, SELECTABLE_CHAINS } from "@/context/ChainContext";
 
 function formatAddress(address: string): string {
@@ -250,6 +250,19 @@ export default function TopBar() {
                   {copied ? <Check size={14} color={chainMetadata.color} /> : <Copy size={14} />}
                   {copied ? "Copied!" : "Copy address"}
                 </button>
+
+                {/* Profile */}
+                <Link
+                  href="/profile"
+                  onClick={() => setDropdownOpen(false)}
+                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left"
+                  style={{ color: "#F2F4F7" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#1E2435")}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                >
+                  <User size={14} />
+                  My Profile
+                </Link>
 
                 {/* View on explorer */}
                 {publicKey && (
