@@ -73,7 +73,9 @@ export function getMarket(id: string): Market | undefined {
 export function formatPool(amount: number): string {
   if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(2)}M`;
   if (amount >= 1_000) return `$${(amount / 1_000).toFixed(1)}k`;
-  return `$${amount}`;
+  if (amount >= 1) return `$${amount.toFixed(2)}`;
+  if (amount > 0) return `$${amount.toFixed(4)}`;
+  return `$0`;
 }
 
 export function timeRemaining(endsAt: string): string {
