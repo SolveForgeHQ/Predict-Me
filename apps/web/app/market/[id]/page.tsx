@@ -5,6 +5,7 @@ import { outcomeColor, winningLabel } from "@/lib/types";
 import TradePanel from "./TradePanel";
 import PositionCard from "@/components/PositionCard";
 import PriceChart from "@/components/PriceChart";
+import ActivityFeed from "@/components/ActivityFeed";
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -300,6 +301,11 @@ export default async function MarketPage({ params }: Props) {
             <PositionCard market={market} />
           </div>
         </div>
+      </div>
+
+      {/* Market activity feed */}
+      <div className="mt-8">
+        <ActivityFeed marketId={id} initialLimit={20} showLoadMore compact={false} />
       </div>
     </div>
   );
